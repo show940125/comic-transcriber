@@ -51,6 +51,8 @@ python scripts/verify-delivery.py
 
 字形白底先辨認文字框內高對比筆畫，排除跨邊界的大型氣泡輪廓，向外擴張少量像素後，以鄰近未遮蔽像素補色。中文以 Canvas 繪出字形遮罩，擴張圓形描邊並填滿封閉空隙，再畫上不透明白底和黑字。這是 CPU 局部補色，細緻插畫上的修復仍需人工檢查；矩形浮層和手動白底保留為逐框選項。
 
+`src/bubble-mask.ts` 從文字框周圍的原圖尋找連通淺底區域，優先使用閉合氣泡內部。氣泡在頁邊或格邊開口時，保留連通淺底並補入小型文字孔洞，大型輪廓與插畫區域維持原樣。補色遮罩、中文字形及白底均限制在辨認出的內部；排版使用內部最大矩形。無法辨認氣泡時，只有邊界顏色一致的背景會自動補色，其他區域保留原文供人工處理。
+
 ## 本機服務
 
 ### ONNX OCR
@@ -88,7 +90,7 @@ npm test
 
 單元測試涵蓋偵測後處理、端點限制、翻譯重試與取消、部分譯文續翻、快取相容及人工評分計算。瀏覽器章節回歸需要建置含 OCR 權重的套件、Python 測試依賴、Chromium 及原創合成圖片；圖片產生器使用 Windows Yu Gothic 字型。
 
-`node scripts/render-preview.mjs` 啟動只綁定 loopback 的原創繪字比較頁，終端機會顯示 URL。頁面比較矩形與字形白底，顯示框外像素、原文殘留及繪字耗時；按「結束測試伺服器」自然結束程序。單元測試另外涵蓋 adapter 缺失／失敗／重查、字形空隙、原文超出譯文範圍與背景補色。
+`node scripts/render-preview.mjs` 啟動只綁定 loopback 的原創繪字比較頁，終端機會顯示 URL。頁面比較矩形與字形白底，顯示框外像素、氣泡輪廓、原文殘留及繪字耗時；按「結束測試伺服器」自然結束程序。本機若已有 `artifacts/bubble-mask-fix/real-regions.json` 與 `real-original.jpg`，會另顯示私人案例比較；公開示意圖使用原創內容。單元測試另外涵蓋 adapter 缺失／失敗／重查、字形空隙、原文超出譯文範圍、背景補色及閉合／開口氣泡。
 
 ```powershell
 Set-Location -LiteralPath 'C:\path\to\comic-transcriber'

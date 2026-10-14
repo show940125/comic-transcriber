@@ -6,6 +6,7 @@ import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 const root=fileURLToPath(new URL('../',import.meta.url)),out=path.join(root,'artifacts/render-preview');
 await mkdir(out,{recursive:true});
+let realRegions=null;try{realRegions=JSON.parse(await readFile(path.join(root,'artifacts/bubble-mask-fix/real-regions.json'),'utf8'));}catch{}
 const client=`import {renderPage} from './src/render.ts';
 const font=new FontFace('ComicTC','url(/font.otf)');document.fonts.add(await font.load());
 const results=[];
@@ -23,21 +24,30 @@ for(const style of ['paper','art']){
  const start=performance.now(),contour=renderPage(image,[region]);const ms=performance.now()-start;
  const rectangle=renderPage(image,[{...region,render:'rectangle'}]);
  const after=contour.getContext('2d').getImageData(0,0,600,330).data,old=rectangle.getContext('2d').getImageData(0,0,600,330).data;
- let outsideChanges=0,changed=0,rectChanged=0;
+ let outsideChanges=0,changed=0,rectChanged=0,outlineChanges=0;
  for(let p=0;p<600*330;p++){const x=p%600,y=Math.floor(p/600),inside=x>=25&&x<375&&y>=55&&y<275;
- const different=[0,1,2,3].some(k=>before[p*4+k]!==after[p*4+k]);if(different){changed++;if(!inside)outsideChanges++;}
+ const different=[0,1,2,3].some(k=>before[p*4+k]!==after[p*4+k]);if(different){changed++;if(!inside)outsideChanges++;if(style==='paper'&&before[p*4]<100&&((x-200)/190)**2+((y-165)/140)**2>.92)outlineChanges++;}
  if([0,1,2,3].some(k=>before[p*4+k]!==old[p*4+k]))rectChanged++;
  }
  // Pixels from the first original Japanese line lie well above the new glyph.
  let oldInkRemaining=0,oldInkPixels=0;
  for(let y=78;y<114;y++)for(let x=65;x<330;x++){const p=y*600+x;if(before[p*4]<100&&before[p*4+1]<100){oldInkPixels++;if(after[p*4]<100)oldInkRemaining++;}}
- results.push({style,ms,outsideChanges,changed,rectangleChanged:rectChanged,oldInkPixels,oldInkRemaining,reduction:1-changed/rectChanged});
+ results.push({style,ms,outsideChanges,outlineChanges,changed,rectangleChanged:rectChanged,oldInkPixels,oldInkRemaining,reduction:1-changed/rectChanged});
  const row=document.createElement('section');const heading=document.createElement('h2');heading.textContent=style==='paper'?'淺底氣泡':'插畫底圖';row.append(heading);
  for(const [label,canvas]of [['原圖',original],['矩形浮層',rectangle],['字形白底＋局部遮蓋',contour]]){const panel=document.createElement('figure'),caption=document.createElement('figcaption');caption.textContent=label;panel.append(caption,canvas);row.append(panel);}document.querySelector('main').append(row);
 }
 document.querySelector('#metrics').textContent=JSON.stringify(results,null,2);
-const passed=results.every(r=>r.outsideChanges===0&&r.oldInkPixels>0&&r.oldInkRemaining===0&&r.reduction>.3);
+const passed=results.every(r=>r.outsideChanges===0&&r.outlineChanges===0&&r.oldInkPixels>0&&r.oldInkRemaining===0&&r.reduction>.3);
 document.querySelector('#status').textContent=passed?'passed':'failed';
+const realRegions=${JSON.stringify(realRegions)};
+if(realRegions){
+ const img=new Image();img.src='/real.jpg';await img.decode();
+ const row=document.createElement('section'),heading=document.createElement('h2');heading.textContent='本機實際案例：閉合氣泡與格邊開口';row.append(heading);
+ for(const [label,regions]of [['原圖',null],['矩形模式',realRegions.map(r=>({...r,render:'rectangle'}))],['氣泡內部限制',realRegions]]){
+  const page=regions?renderPage(img,regions):renderPage(img,[],true),crop=document.createElement('canvas');crop.width=800;crop.height=240;crop.getContext('2d').drawImage(page,0,0,800,240,0,0,800,240);
+  const panel=document.createElement('figure'),caption=document.createElement('figcaption');caption.textContent=label;panel.append(caption,crop);row.append(panel);
+ }document.querySelector('main').append(row);
+}
 document.querySelector('#finish').onclick=()=>fetch('/finish',{method:'POST'}).then(()=>document.querySelector('#finish').disabled=true);
 `;
 await build({stdin:{contents:client,resolveDir:root,sourcefile:'render-preview-client.ts',loader:'ts'},bundle:true,format:'esm',outfile:path.join(out,'client.js')});
@@ -47,6 +57,7 @@ const server=createServer(async(req,res)=>{
  try{
   if(req.url==='/finish'&&req.method==='POST'){res.end('closed');server.close();return;}
   if(req.url==='/font.otf'){res.setHeader('Content-Type','font/otf');res.end(await readFile(path.join(root,'public/fonts/NotoSansCJKtc-Regular.otf')));return;}
+  if(req.url==='/real.jpg'&&realRegions){res.setHeader('Content-Type','image/jpeg');res.end(await readFile(path.join(root,'artifacts/bubble-mask-fix/real-original.jpg')));return;}
   if(req.url==='/client.js'){res.setHeader('Content-Type','text/javascript');res.end(await readFile(path.join(out,'client.js')));return;}
   if(req.url==='/'){res.setHeader('Content-Type','text/html; charset=utf-8');res.end(html);return;}
   res.writeHead(404).end();
