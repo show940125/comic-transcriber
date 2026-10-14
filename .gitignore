@@ -1,0 +1,45 @@
+# Dependencies and generated builds
+/node_modules/
+/.wxt/
+/.output/
+/.venv/
+/.cache/
+/dist/
+__pycache__/
+*.py[cod]
+*.tsbuildinfo
+
+# Downloaded runtimes, fonts and model weights
+/public/ort/
+/public/mlc/
+/public/fonts/
+/public/models/
+*.onnx
+*.ort
+*.gguf
+*.wasm
+*.exe
+*.dll
+*.zip
+*.partial
+
+# Local research, manga, screenshots, logs and browser profiles
+/artifacts/*
+!/artifacts/model-lock.json
+!/artifacts/native-llm-lock.json
+*.log
+playwright-report/
+test-results/
+
+# Credentials and local tool state
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+/.codex/
+/.codexwolf/
+/.vscode/
+/.idea/
+Thumbs.db
+.DS_Store

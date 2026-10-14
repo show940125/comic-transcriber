@@ -1,0 +1,121 @@
+{
+  "schema": 1,
+  "generated": "2026-10-13T10:35:08.982Z",
+  "vision": [
+    {
+      "id": "detector",
+      "repo": "ogkalu/comic-text-and-bubble-detector",
+      "revision": "16e8a622f91fabc6b5b65c96d32d1183f8843546",
+      "files": [
+        {
+          "name": "detector-v4-s_int8.onnx",
+          "url": "https://huggingface.co/ogkalu/comic-text-and-bubble-detector/resolve/16e8a622f91fabc6b5b65c96d32d1183f8843546/detector-v4-s_int8.onnx",
+          "sha256": "5fe9e4f576e49d4e7e8b0e029d6d3cdc252abd4694113e1cae120e62c931ea79",
+          "bytes": 11120765
+        }
+      ],
+      "license": "apache-2.0",
+      "backend": "wasm"
+    },
+    {
+      "id": "manga-ocr",
+      "repo": "mayocream/manga-ocr-onnx",
+      "revision": "24b12778d85800835e2ca409236de281b8ab7b9f",
+      "files": [
+        {
+          "name": "encoder_model.onnx",
+          "url": "https://huggingface.co/mayocream/manga-ocr-onnx/resolve/24b12778d85800835e2ca409236de281b8ab7b9f/encoder_model.onnx",
+          "sha256": "15fa8155fe9bc1a7d25d9bb353debaa4def033d0174e907dbd2dd6d995def85f",
+          "bytes": 343454249
+        },
+        {
+          "name": "decoder_model.onnx",
+          "url": "https://huggingface.co/mayocream/manga-ocr-onnx/resolve/24b12778d85800835e2ca409236de281b8ab7b9f/decoder_model.onnx",
+          "sha256": "ef7765261e9d1cdc34d89356986c2bbc2a082897f753a89605ae80fdfa61f5e8",
+          "bytes": 117480262
+        },
+        {
+          "name": "vocab.txt",
+          "url": "https://huggingface.co/mayocream/manga-ocr-onnx/resolve/24b12778d85800835e2ca409236de281b8ab7b9f/vocab.txt",
+          "sha256": "5cb5c5586d98a2f331d9f8828e4586479b0611bfba5d8c3b6dadffc84d6a36a3",
+          "bytes": 30216
+        }
+      ],
+      "license": "apache-2.0",
+      "backend": "probe"
+    }
+  ],
+  "llm": [
+    {
+      "model": "https://huggingface.co/mlc-ai/Qwen3.5-0.8B-q4f16_1-MLC/resolve/0ec138972555613c1d7812a821778ad0398c8790/",
+      "model_id": "Qwen3.5-0.8B-q4f16_1-MLC",
+      "model_lib": "/mlc/Qwen3.5-0.8B-q4f16_1-MLC.wasm",
+      "vram_required_MB": 1629.49,
+      "low_resource_required": true,
+      "overrides": {
+        "context_window_size": 4096,
+        "max_history_size": 1
+      },
+      "sha256": "023c24d853746e24599dc99d7649e356986fd3e1c476e6a2b8ef7af4c9f056e0",
+      "revision": "0ec138972555613c1d7812a821778ad0398c8790",
+      "license": "apache-2.0",
+      "licenseSource": "https://huggingface.co/Qwen/Qwen3.5-0.8B",
+      "convertedLicenseStatus": "upstream-only: review before publication"
+    },
+    {
+      "model": "https://huggingface.co/mlc-ai/Qwen3.5-0.8B-q4f32_1-MLC/resolve/4ed017713f04c91ffe55a9dca8c7ac853c41314d/",
+      "model_id": "Qwen3.5-0.8B-q4f32_1-MLC",
+      "model_lib": "/mlc/Qwen3.5-0.8B-q4f32_1-MLC.wasm",
+      "vram_required_MB": 1894.19,
+      "low_resource_required": true,
+      "overrides": {
+        "context_window_size": 4096,
+        "max_history_size": 1
+      },
+      "sha256": "09e88aa956c6c2346278c5dc13328336f5048405ed7bac17a2528e7c9e656998",
+      "revision": "4ed017713f04c91ffe55a9dca8c7ac853c41314d",
+      "license": "apache-2.0",
+      "licenseSource": "https://huggingface.co/Qwen/Qwen3.5-0.8B",
+      "convertedLicenseStatus": "upstream-only: review before publication"
+    },
+    {
+      "model": "https://huggingface.co/mlc-ai/Qwen3.5-2B-q4f16_1-MLC/resolve/dd74e9c8a20c4546df85c844103bff87b6dcacad/",
+      "model_id": "Qwen3.5-2B-q4f16_1-MLC",
+      "model_lib": "/mlc/Qwen3.5-2B-q4f16_1-MLC.wasm",
+      "vram_required_MB": 2245.44,
+      "low_resource_required": false,
+      "overrides": {
+        "context_window_size": 4096,
+        "max_history_size": 1
+      },
+      "sha256": "49cc4a96680ea6dad173f48ad90e219ac5f59f7b4bab61ac0029c94385720a2c",
+      "revision": "dd74e9c8a20c4546df85c844103bff87b6dcacad",
+      "license": "apache-2.0",
+      "licenseSource": "https://huggingface.co/Qwen/Qwen3.5-2B",
+      "convertedLicenseStatus": "upstream-only: review before publication"
+    },
+    {
+      "model": "https://huggingface.co/mlc-ai/Qwen3.5-2B-q4f32_1-MLC/resolve/d835e5c41aa56174d915e8a3940cde599d3f5a30/",
+      "model_id": "Qwen3.5-2B-q4f32_1-MLC",
+      "model_lib": "/mlc/Qwen3.5-2B-q4f32_1-MLC.wasm",
+      "vram_required_MB": 2591.55,
+      "low_resource_required": false,
+      "overrides": {
+        "context_window_size": 4096,
+        "max_history_size": 1
+      },
+      "sha256": "e33848b6dd6e473a5f3791cc7d242e7ac750e89503232b12d7872c073f5e386f",
+      "revision": "d835e5c41aa56174d915e8a3940cde599d3f5a30",
+      "license": "apache-2.0",
+      "licenseSource": "https://huggingface.co/Qwen/Qwen3.5-2B",
+      "convertedLicenseStatus": "upstream-only: review before publication"
+    }
+  ],
+  "font": {
+    "url": "https://raw.githubusercontent.com/notofonts/noto-cjk/f8d157532fbfaeda587e826d4cd5b21a49186f7c/Sans/OTF/TraditionalChinese/NotoSansCJKtc-Regular.otf",
+    "sha256": "dce08bd4fd91aa8aa76ed8fea4b694c2dfb8550f67871e326843212ddbeb88b4",
+    "license": "OFL-1.1",
+    "licenseUrl": "https://raw.githubusercontent.com/notofonts/noto-cjk/f8d157532fbfaeda587e826d4cd5b21a49186f7c/Sans/LICENSE",
+    "licenseSha256": "6a73f9541c2de74158c0e7cf6b0a58ef774f5a780bf191f2d7ec9cc53efe2bf2"
+  }
+}
