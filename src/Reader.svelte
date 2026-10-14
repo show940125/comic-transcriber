@@ -108,7 +108,10 @@
         regions = await engine({op:'translate',regions:$state.snapshot(regions),settings:{...$state.snapshot(config),backend:'local'},modelId:''},progress,aborter?.signal);
       }
     } else if (config.backend === 'chrome') regions = await chromeTranslate($state.snapshot(regions), progress, aborter?.signal);
-    else regions = await engine({ op: 'translate', regions: $state.snapshot(regions), settings: $state.snapshot(config), modelId: modelId() }, progress, aborter?.signal);
+    else {
+      if(config.backend==='webllm'&&!gpu)gpu=await engine({op:'probe'},progress,aborter?.signal);
+      regions = await engine({ op: 'translate', regions: $state.snapshot(regions), settings: $state.snapshot(config), modelId: modelId() }, progress, aborter?.signal);
+    }
     signature = contentSignature(config); await save();
   }
   async function translatePage() {
@@ -174,7 +177,7 @@
     };
     addEventListener('message', receive);
     const stop = () => {aborter?.abort();disposeChromeTranslator();}; addEventListener('pagehide', stop);
-    void (async () => { config = await readSettings(); if (token && parent !== window) { const authority = await chrome.runtime.sendMessage({ channel: 'frame-authority', token }); if (authority?.ok) allowedOrigin = authority.origin; else { error = '未授權的嵌入工作台，請從墨譯按鈕開啟'; return; } } try { await loadFont(!!siteInput); fontReady = true; } catch { error = '繁中字型載入失敗，暫用系統字型'; } gpu = await engine({ op: 'probe' }).catch(() => undefined); if (allowedOrigin) parent.postMessage({ channel: 'comic-ready', token }, allowedOrigin);
+    void (async () => { config = await readSettings(); if (token && parent !== window) { const authority = await chrome.runtime.sendMessage({ channel: 'frame-authority', token }); if (authority?.ok) allowedOrigin = authority.origin; else { error = '未授權的嵌入工作台，請從墨譯按鈕開啟'; return; } } try { await loadFont(!!siteInput); fontReady = true; } catch { error = '繁中字型載入失敗，暫用系統字型'; } if (allowedOrigin) parent.postMessage({ channel: 'comic-ready', token }, allowedOrigin);
       if(alive&&siteInput)void action(async()=>{if(siteInput.priorSummary)config.priorSummary=siteInput.priorSummary;if(siteInput.imageUrl){remoteImageUrl=publicImageUrl(siteInput.imageUrl).href;await loadRemote();}else if(siteInput.base64)await load(new Blob([imageBytes(siteInput.base64)],{type:siteInput.mime}),'web-comic');if(siteInput.auto){await translatePage();await applyToPage();}});
     })();
     return () => { alive=false;stop(); removeEventListener('pagehide', stop); removeEventListener('message', receive); if (imageUrl) URL.revokeObjectURL(imageUrl); };
@@ -216,7 +219,7 @@
         <label>日文原文<textarea aria-label="日文原文" rows="4" value={active.source} oninput={e => update('source', e.currentTarget.value)} disabled={busy}></textarea></label>
         <label>繁中譯文<textarea aria-label="繁中譯文" rows="4" value={active.translation} oninput={e => update('translation', e.currentTarget.value)} disabled={busy}></textarea></label>
         <div class="coords">{#each ['x', 'y', 'width', 'height', 'order'] as field}<label>{({x:'X',y:'Y',width:'寬',height:'高',order:'順序'} as any)[field]}<input type="number" aria-label={field} value={(active as any)[field]} disabled={busy} oninput={e => { const n = Number(e.currentTarget.value); if (Number.isFinite(n)) update(field as keyof Region, Math.max(0, n)); }} /></label>{/each}</div>
-        <label>呈現方式<select aria-label="呈現方式" value={active.render} disabled={busy} onchange={e => update('render', e.currentTarget.value)}><option value="auto">白底氣泡自動擦字</option><option value="overlay">保留背景／譯文浮層</option><option value="fill">手動確認擦成白底</option></select></label>
+        <label>呈現方式<select aria-label="呈現方式" value={active.render} disabled={busy} onchange={e => update('render', e.currentTarget.value)}><option value="auto">字形白底／局部遮蓋原文</option><option value="overlay">字形白底（浮層）</option><option value="rectangle">矩形浮層（舊方式）</option><option value="fill">手動確認擦成白底</option></select></label>
         {#each active.warnings as warning}<p class="warning">{warning}</p>{/each}
         <div class="row"><button disabled={busy} onclick={merge}>合併下一框</button><button disabled={busy} onclick={remove}>刪除此框</button></div>
       {:else}<p class="hint">點選圖片上的文字框；拖曳手動框選或以座標欄調整大小。</p>{/if}

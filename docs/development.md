@@ -45,6 +45,12 @@ python scripts/verify-delivery.py
 
 網站與圖片 CDN 分別授權。OpenAI-compatible 與 OCR 備援端點僅接受 localhost／127.0.0.1 等 loopback 地址，備援需在設定中啟用。
 
+### GPU 探測與字形白底
+
+工作台及設定頁開啟時不主動探測 GPU。WebLLM 或選用 WebGPU OCR 時才呼叫 adapter，結果包含不可用狀態均在 Worker 中快取；設定頁的「檢查 WebGPU」可重新檢查。程式自身呼叫 `requestAdapter()` 時省略 Windows 不採用的 `powerPreference`，WASM 路徑不需這項探測。WebLLM／ONNX 的內部 GPU 呼叫仍受第三方執行庫與瀏覽器限制，真正的 GPU 失效會保留診斷。
+
+字形白底先辨認文字框內高對比筆畫，排除跨邊界的大型氣泡輪廓，向外擴張少量像素後，以鄰近未遮蔽像素補色。中文以 Canvas 繪出字形遮罩，擴張圓形描邊並填滿封閉空隙，再畫上不透明白底和黑字。這是 CPU 局部補色，細緻插畫上的修復仍需人工檢查；矩形浮層和手動白底保留為逐框選項。
+
 ## 本機服務
 
 ### ONNX OCR
@@ -81,6 +87,8 @@ npm test
 ```
 
 單元測試涵蓋偵測後處理、端點限制、翻譯重試與取消、部分譯文續翻、快取相容及人工評分計算。瀏覽器章節回歸需要建置含 OCR 權重的套件、Python 測試依賴、Chromium 及原創合成圖片；圖片產生器使用 Windows Yu Gothic 字型。
+
+`node scripts/render-preview.mjs` 啟動只綁定 loopback 的原創繪字比較頁，終端機會顯示 URL。頁面比較矩形與字形白底，顯示框外像素、原文殘留及繪字耗時；按「結束測試伺服器」自然結束程序。單元測試另外涵蓋 adapter 缺失／失敗／重查、字形空隙、原文超出譯文範圍與背景補色。
 
 ```powershell
 Set-Location -LiteralPath 'C:\path\to\comic-transcriber'

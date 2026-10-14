@@ -2,7 +2,7 @@ export type Stage = 'queued' | 'loading' | 'detecting' | 'review' | 'ocr' | 'tra
 export interface Region {
   id: string; x: number; y: number; width: number; height: number; order: number;
   source: string; translation: string; score: number; warnings: string[];
-  kind: 'bubble' | 'free'; render: 'auto' | 'overlay' | 'fill';
+  kind: 'bubble' | 'free'; render: 'auto' | 'overlay' | 'fill' | 'rectangle';
   needsReview?: boolean;
   ocrDone?:boolean;
   ocrBox?: { x: number; y: number; width: number; height: number };
@@ -32,5 +32,5 @@ export type EngineRequest =
   | { op: 'translate'; regions: Region[]; settings: Settings; modelId: string }
   | { op: 'prefetch'; modelId: string }
   | { op: 'release-llm' }
-  | { op: 'probe' };
+  | { op: 'probe'; refresh?: boolean };
 export interface WorkerRequest { id: string; request: EngineRequest }

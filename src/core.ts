@@ -73,7 +73,7 @@ export function importCorrection(data: unknown, hash: string, width: number, hei
     const r = row as Region;
     if (!r || typeof r.id !== 'string' || ids.has(r.id) || typeof r.source !== 'string' || typeof r.translation !== 'string' || r.source.length > 1500 || r.translation.length > 1500 || ![r.x,r.y,r.width,r.height,r.order].every(Number.isFinite) || r.x < 0 || r.y < 0 || r.width <= 0 || r.height <= 0 || r.x+r.width > width || r.y+r.height > height) throw new Error('校正文字框、ID 或內容不合法');
     ids.add(r.id);
-    return { id:r.id,x:r.x,y:r.y,width:r.width,height:r.height,order:r.order,source:r.source,translation:r.translation,ocrDone:r.ocrDone===true,needsReview:needsOcrReview(r.source),kind:r.kind==='free'?'free':'bubble',render:['auto','fill','overlay'].includes(r.render)?r.render:'auto',score:Number.isFinite(r.score)?r.score:1,warnings:Array.isArray(r.warnings)?r.warnings.filter(w=>typeof w==='string').slice(0,10):[] };
+    return { id:r.id,x:r.x,y:r.y,width:r.width,height:r.height,order:r.order,source:r.source,translation:r.translation,ocrDone:r.ocrDone===true,needsReview:needsOcrReview(r.source),kind:r.kind==='free'?'free':'bubble',render:['auto','fill','overlay','rectangle'].includes(r.render)?r.render:'auto',score:Number.isFinite(r.score)?r.score:1,warnings:Array.isArray(r.warnings)?r.warnings.filter(w=>typeof w==='string').slice(0,10):[] };
   });
 }
 export function contentSignature(settings: Settings): string {

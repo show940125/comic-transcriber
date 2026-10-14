@@ -7,6 +7,7 @@ import { bubbleRegions } from './detection';
 import { traditional } from './language';
 import { needsOcrReview, ocrReviewWarning } from './ocr-quality';
 import { imageBase64 } from './binary';
+import { createGpuProbe } from './gpu';
 let base = '', current = '';
 let tail: Promise<unknown> = Promise.resolve();
 const aborts = new Map<string, AbortController>();
@@ -14,10 +15,7 @@ const sessions = new Map<string, { session: ort.InferenceSession; backend: strin
 let llm: MLCEngine | undefined, loadedId = '', vocab: string[] = [];
 const report = (d: Diagnostic) => postMessage({ type: 'progress', id: current, diagnostic: d });
 function check(signal: AbortSignal) { signal.throwIfAborted(); }
-async function capability() {
-  const adapter = await navigator.gpu?.requestAdapter({ powerPreference: 'high-performance' });
-  return { available: !!adapter, f16: adapter?.features.has('shader-f16') ?? false, info: adapter ? { vendor: adapter.info.vendor, architecture: adapter.info.architecture, device: adapter.info.device, description: adapter.info.description } : null, limits: adapter ? { maxBufferSize: adapter.limits.maxBufferSize, maxStorageBufferBindingSize: adapter.limits.maxStorageBufferBindingSize } : null };
-}
+const capability = createGpuProbe(() => navigator.gpu);
 async function artifact(model: string, name: string, signal: AbortSignal): Promise<ArrayBuffer> {
   const spec = lock.vision.find(m => m.id === model)!.files.find(f => f.name === name)!;
   const cache = await caches.open('comic-vision-v1');
@@ -212,7 +210,7 @@ async function translate(request: Extract<EngineRequest, { op: 'translate' }>, s
 }
 async function handle(request: EngineRequest, signal: AbortSignal) {
   switch (request.op) {
-    case 'probe': return capability();
+    case 'probe': return capability(request.refresh);
     case 'release-llm':
       if(llm)await llm.unload().catch(()=>{});llm=undefined;loadedId='';return {released:true};
     case 'detect': return detect(request, signal);
