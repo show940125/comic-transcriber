@@ -27,7 +27,7 @@ export function dilateMask(mask: Uint8Array, width: number, height: number, radi
   }
   return result;
 }
-export function sourceInkMask(rgba: Uint8ClampedArray, width: number, height: number) {
+export function sourceInkMask(rgba: Uint8ClampedArray, width: number, height: number, anchor?: {textBounds:{x:number;y:number;width:number;height:number};interior?:Uint8Array}) {
   const luma = (p: number) => rgba[p * 4] * .299 + rgba[p * 4 + 1] * .587 + rgba[p * 4 + 2] * .114;
   const border: number[] = [];
   const step = Math.max(1, Math.floor((width + height) / 128));
@@ -57,7 +57,11 @@ export function sourceInkMask(rgba: Uint8ClampedArray, width: number, height: nu
         if (mask[q] && !visited[q]) { visited[q] = 1; queue[tail++] = q; }
       }
     }
-    if (border && (x1 - x0 > width * .65 || y1 - y0 > height * .65)) {
+    const bounds=anchor?.textBounds;
+    const anchored=!!bounds&&x0>=bounds.x-4&&y0>=bounds.y-4&&x1<bounds.x+bounds.width+4&&y1<bounds.y+bounds.height+4;
+    let safeInterior=true;
+    if(anchor?.interior){let admitted=0;for(let i=0;i<tail;i++)admitted+=anchor.interior[queue[i]];safeInterior=admitted/tail>.98;}
+    if (anchor ? !(anchored&&safeInterior) : border && (x1 - x0 > width * .65 || y1 - y0 > height * .65)) {
       for (let i = 0; i < tail; i++) mask[queue[i]] = 0;
     }
   }

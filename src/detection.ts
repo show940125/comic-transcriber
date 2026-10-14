@@ -35,6 +35,6 @@ export function bubbleRegions(bitmap: ImageBitmap, raw: Region[]) {
     const x = Math.floor(r.x), y = Math.floor(r.y), w = Math.max(1, Math.floor(r.width)), h = Math.max(1, Math.floor(r.height));
     const ink = inkBounds(ctx.getImageData(x, y, w, h).data, w, h);
     const ocrBox = { x, y, width: w, height: h };
-    return ink ? { ...r, ocrBox, x: x + ink.x, y: y + ink.y, width: ink.width, height: ink.height } : { ...r, ocrBox, warnings: [...r.warnings, '氣泡內沒有明確文字，請檢查'] };
+    return ink ? { ...r, ocrBox, bubbleBox:ocrBox, x: x + ink.x, y: y + ink.y, width: ink.width, height: ink.height } : { ...r, ocrBox, bubbleBox:ocrBox, warnings: [...r.warnings, '氣泡內沒有明確文字，請檢查'] };
   });
 }

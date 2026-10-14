@@ -6,7 +6,7 @@ import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 const root=fileURLToPath(new URL('../',import.meta.url)),out=path.join(root,'artifacts/render-preview');
 await mkdir(out,{recursive:true});
-let realRegions=null;try{realRegions=JSON.parse(await readFile(path.join(root,'artifacts/bubble-mask-fix/real-regions.json'),'utf8'));}catch{}
+let realRegions=null;if(!process.argv.includes('--original-only'))try{realRegions=JSON.parse(await readFile(path.join(root,'artifacts/bubble-mask-fix/real-regions.json'),'utf8'));}catch{}
 const client=`import {renderPage} from './src/render.ts';
 const font=new FontFace('ComicTC','url(/font.otf)');document.fonts.add(await font.load());
 const results=[];

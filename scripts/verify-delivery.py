@@ -26,11 +26,17 @@ with zipfile.ZipFile(target) as archive:
     assert not any('paddle' in name.lower() or 'real-corpus' in name or name.endswith('.gguf') for name in names)
     assert 'LICENSE' in names and 'NOTICE.md' in names
     assert archive.read('NOTICE.md') == (root / 'NOTICE.md').read_bytes()
+    build_files = {p.relative_to(root / '.output/chrome-mv3').as_posix(): p
+                   for p in (root / '.output/chrome-mv3').rglob('*') if p.is_file()}
+    assert set(names) == set(build_files) | {'LICENSE', 'NOTICE.md'}, 'Unexpected or missing ZIP files'
+    assert len(names) == len(set(names)), 'Duplicate ZIP entries'
+    for name, path in build_files.items():
+        assert archive.read(name) == path.read_bytes(), f'ZIP differs from build: {name}'
 
 zip_identity = identity(target)
 result = {'status': 'passed', 'version': version, 'crcAllEntries': True,
           'files': len(names), **zip_identity, 'mangaImagesExcluded': True,
-          'optionalGGUFExcluded': True, 'manifestMatchesBuild': True}
+          'optionalGGUFExcluded': True, 'manifestMatchesBuild': True, 'allBuildFilesMatch': True}
 (root / 'artifacts/zip-verification.json').write_text(json.dumps(result, indent=2), encoding='utf-8')
 delivery = {'checkedAt': datetime.now(timezone.utc).isoformat(), 'artifacts': [zip_identity,
             identity(root / '.output/chrome-mv3/manifest.json'), identity(root / 'artifacts/package-audit.json')]}

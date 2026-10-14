@@ -20,3 +20,16 @@ test('mixed artwork borders are not safe for automatic colour propagation',()=>{
 test('even a thin contour crossing the crop boundary disables flat-background repair',()=>{
   const a=image(30,30,255);for(let c=0;c<3;c++)a[10*4+c]=0;assert.equal(flatBackground(a,30,30),false);
 });
+test('panel-edge balloon admits tall anchored lettering instead of reducing layout to a side strip',()=>{
+  const w=90,h=150,a=image(w,h,255),r={x:30,y:15,width:30,height:120};
+  for(let y=20;y<120;y++)for(let x=37;x<53;x++)for(let c=0;c<3;c++)a[(y*w+x)*4+c]=0;
+  const mask=bubbleInterior(a,w,h,r)!;assert(mask);assert.equal(mask[70*w+45],1);
+  const crop=new Uint8Array(r.width*r.height);for(let y=0;y<r.height;y++)for(let x=0;x<r.width;x++)crop[y*r.width+x]=mask[(r.y+y)*w+r.x+x];
+  assert.equal(largestInteriorRect(crop,r.width,r.height)?.width,30);
+});
+test('a large white counter inside a Japanese square glyph is not mistaken for the speech balloon',()=>{
+  const w=90,h=90,a=image(w,h,180);
+  for(let y=10;y<80;y++)for(let x=10;x<80;x++)for(let c=0;c<3;c++)a[(y*w+x)*4+c]=255;
+  for(let y=32;y<59;y++)for(let x=32;x<59;x++)if(x<35||x>55||y<35||y>55)for(let c=0;c<3;c++)a[(y*w+x)*4+c]=0;
+  const mask=bubbleInterior(a,w,h,{x:29,y:29,width:32,height:32})!;assert.equal(mask[44*w+33],1);assert.equal(mask[44*w+9],0);
+});

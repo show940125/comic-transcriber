@@ -12,7 +12,7 @@ export function readingOrder(regions: Region[]): Region[] {
 }
 export function clampRegion(r: Region, width: number, height: number): Region {
   const x = Math.max(0, Math.min(width - 1, r.x)), y = Math.max(0, Math.min(height - 1, r.y));
-  return { ...r, x, y, width: Math.max(1, Math.min(width - x, r.width)), height: Math.max(1, Math.min(height - y, r.height)) };
+  return { ...r, x, y, width: Math.max(1, Math.min(width - x, r.width)), height: Math.max(1, Math.min(height - y, r.height)),...(r.fontScale===undefined?{}:{fontScale:Math.max(.5,Math.min(2,Number.isFinite(r.fontScale)?r.fontScale:1))}) };
 }
 export function detectorBox(coords:number[],width:number,height:number){
   if(coords.length!==4||!coords.every(Number.isFinite))return null;
@@ -73,7 +73,10 @@ export function importCorrection(data: unknown, hash: string, width: number, hei
     const r = row as Region;
     if (!r || typeof r.id !== 'string' || ids.has(r.id) || typeof r.source !== 'string' || typeof r.translation !== 'string' || r.source.length > 1500 || r.translation.length > 1500 || ![r.x,r.y,r.width,r.height,r.order].every(Number.isFinite) || r.x < 0 || r.y < 0 || r.width <= 0 || r.height <= 0 || r.x+r.width > width || r.y+r.height > height) throw new Error('校正文字框、ID 或內容不合法');
     ids.add(r.id);
-    return { id:r.id,x:r.x,y:r.y,width:r.width,height:r.height,order:r.order,source:r.source,translation:r.translation,ocrDone:r.ocrDone===true,needsReview:needsOcrReview(r.source),kind:r.kind==='free'?'free':'bubble',render:['auto','fill','overlay','rectangle'].includes(r.render)?r.render:'auto',score:Number.isFinite(r.score)?r.score:1,warnings:Array.isArray(r.warnings)?r.warnings.filter(w=>typeof w==='string').slice(0,10):[] };
+    const rect=(value:Region['ocrBox'])=>{if(!value)return undefined;if(![value.x,value.y,value.width,value.height].every(Number.isFinite)||value.x<0||value.y<0||value.width<=0||value.height<=0||value.x+value.width>width||value.y+value.height>height)throw new Error('校正裁切或氣泡範圍不合法');return {...value};};
+    if(r.textDirection!==undefined&&!['auto','horizontal','vertical'].includes(r.textDirection))throw new Error('校正排版方向不合法');
+    if(r.fontScale!==undefined&&(!Number.isFinite(r.fontScale)||r.fontScale<.5||r.fontScale>2))throw new Error('校正字級倍率不合法');
+    return { id:r.id,x:r.x,y:r.y,width:r.width,height:r.height,order:r.order,source:r.source,translation:r.translation,ocrDone:r.ocrDone===true,needsReview:needsOcrReview(r.source),kind:r.kind==='free'?'free':'bubble',render:['auto','fill','overlay','rectangle'].includes(r.render)?r.render:'auto',score:Number.isFinite(r.score)?r.score:1,warnings:Array.isArray(r.warnings)?r.warnings.filter(w=>typeof w==='string').slice(0,10):[],ocrBox:rect(r.ocrBox),bubbleBox:rect(r.bubbleBox),textDirection:r.textDirection??'auto',fontScale:r.fontScale??1 };
   });
 }
 export function contentSignature(settings: Settings): string {

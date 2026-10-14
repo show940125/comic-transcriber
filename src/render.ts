@@ -1,6 +1,7 @@
 import type { Region } from './types';
 import { dilateMask, fillMaskHoles, sourceInkMask, repairTextBackground, glyphBackingMask } from './text-mask';
 import { bubbleInterior, largestInteriorRect, flatBackground } from './bubble-mask';
+import {layoutText} from './text-layout';
 export function wrapText(ctx: CanvasRenderingContext2D, text: string, width: number) {
   const lines: string[] = []; let line = '';
   for (const char of text) {
@@ -21,48 +22,54 @@ export function canFill(ctx: CanvasRenderingContext2D, region: Region) {
   }
   return total > 0 && white / total > .98;
 }
-export function renderPage(image: HTMLImageElement, regions: Region[], original = false): HTMLCanvasElement {
+export function renderPage(image: HTMLImageElement, regions: Region[], original = false, warn?:(id:string,message:string)=>void): HTMLCanvasElement {
   const canvas = document.createElement('canvas'); canvas.width = image.naturalWidth; canvas.height = image.naturalHeight;
   const ctx = canvas.getContext('2d', { willReadFrequently: true })!; ctx.drawImage(image, 0, 0);
   if (original) return canvas;
   for (const r of regions) {
     if (!r.translation.trim()) continue;
-    const x = Math.floor(r.x), y = Math.floor(r.y), w = Math.max(1, Math.ceil(r.x + r.width) - x), h = Math.max(1, Math.ceil(r.y + r.height) - y);
+    const manual=r.render==='fill'||r.render==='rectangle';
+    const bubble=r.bubbleBox??(r.kind==='bubble'?r.ocrBox:undefined),bounds=manual?r:bubble??r;
+    const margin=manual?0:8;
+    const x=Math.max(0,Math.floor(Math.min(bounds.x,r.x)-margin)),y=Math.max(0,Math.floor(Math.min(bounds.y,r.y)-margin));
+    const w=Math.max(1,Math.min(image.naturalWidth,Math.ceil(Math.max(bounds.x+bounds.width,r.x+r.width)+margin))-x),h=Math.max(1,Math.min(image.naturalHeight,Math.ceil(Math.max(bounds.y+bounds.height,r.y+r.height)+margin))-y);
     const source = document.createElement('canvas'); source.width = w; source.height = h;
     const sourceCtx = source.getContext('2d', { willReadFrequently: true })!;
     sourceCtx.drawImage(image, x, y, w, h, 0, 0, w, h);
     const sourcePixels = sourceCtx.getImageData(0, 0, w, h);
     let interior:Uint8Array|null=null,layout={x:r.x,y:r.y,width:r.width,height:r.height};
-    if(r.render!=='fill'&&r.render!=='rectangle'){
+    if(!manual){
       const margin=Math.min(192,Math.max(64,Math.ceil(Math.max(w,h)*.8))),cx=Math.max(0,x-margin),cy=Math.max(0,y-margin);
       const cw=Math.min(image.naturalWidth-cx,w+margin+x-cx),ch=Math.min(image.naturalHeight-cy,h+margin+y-cy);
       const context=document.createElement('canvas');context.width=cw;context.height=ch;
       const contextCtx=context.getContext('2d',{willReadFrequently:true})!;contextCtx.drawImage(image,cx,cy,cw,ch,0,0,cw,ch);
-      const bubble=bubbleInterior(contextCtx.getImageData(0,0,cw,ch).data,cw,ch,{x:x-cx,y:y-cy,width:w,height:h});
-      if(bubble){
+      const bubbleMask=bubbleInterior(contextCtx.getImageData(0,0,cw,ch).data,cw,ch,{x:r.x-cx,y:r.y-cy,width:r.width,height:r.height});
+      if(bubbleMask){
         interior=new Uint8Array(w*h);
-        for(let yy=0;yy<h;yy++)for(let xx=0;xx<w;xx++)interior[yy*w+xx]=bubble[(yy+y-cy)*cw+xx+x-cx];
+        for(let yy=0;yy<h;yy++)for(let xx=0;xx<w;xx++)interior[yy*w+xx]=bubbleMask[(yy+y-cy)*cw+xx+x-cx];
         const rect=largestInteriorRect(interior,w,h);
         if(rect&&rect.width>=12&&rect.height>=12)layout={...rect,x:x+rect.x,y:y+rect.y};
       }
     }
-    ctx.save(); ctx.beginPath(); ctx.rect(r.x, r.y, r.width, r.height); ctx.clip();
-    const pad = Math.min(6, layout.width / 10, layout.height / 10), width = layout.width - pad * 2, height = layout.height - pad * 2;
-    let size = Math.min(42, Math.floor(height * .7)), lines: string[] = [];
-    while (size >= 6) { ctx.font = `${size}px "ComicTC", "Microsoft JhengHei", sans-serif`; lines = wrapText(ctx, r.translation, width); if (lines.length * size * 1.25 <= height) break; size--; }
-    const lineHeight = size * 1.25, top = layout.y + (layout.height - lines.length * lineHeight) / 2;
+    ctx.save(); ctx.beginPath(); ctx.rect(x,y,w,h); ctx.clip();
     const glyphs = document.createElement('canvas'); glyphs.width = w; glyphs.height = h;
     const text = glyphs.getContext('2d', { willReadFrequently: true })!;
-    text.font = ctx.font; text.fillStyle = '#171717'; text.textAlign = 'center'; text.textBaseline = 'middle';
-    for (let i = 0; i < lines.length; i++) text.fillText(lines[i], layout.x - x + layout.width / 2, top - y + (i + .5) * lineHeight, width);
-    if (r.render === 'fill' || r.render === 'rectangle') {
+    const lettering=layoutText(text,r.translation,layout,r.textDirection,r.fontScale);
+    text.font=`${lettering.size}px "ComicTC", "Microsoft JhengHei", sans-serif`;text.fillStyle = '#171717'; text.textAlign = 'center'; text.textBaseline = 'middle';
+    for(const letter of lettering.letters)text.fillText(letter.text,letter.x-x,letter.y-y);
+    if(!lettering.fits)warn?.(r.id,'中文空間不足，請調整框選或縮短譯文');
+    if (manual) {
       ctx.fillStyle = r.render === 'fill' ? '#ffffff' : 'rgba(255,255,255,.94)';
       ctx.fillRect(r.x, r.y, r.width, r.height);
     } else {
-      const eraseMask = interior||flatBackground(sourcePixels.data,w,h)?dilateMask(fillMaskHoles(sourceInkMask(sourcePixels.data, w, h), w, h), w, h, 2):new Uint8Array(w*h);
+      const flat=flatBackground(sourcePixels.data,w,h),safe=!!interior||flat;
+      const sourceMask=safe?sourceInkMask(sourcePixels.data,w,h,{textBounds:{x:r.x-x,y:r.y-y,width:r.width,height:r.height},interior:interior??undefined}):new Uint8Array(w*h);
+      const eraseMask=dilateMask(fillMaskHoles(sourceMask,w,h),w,h,2);
+      if(!safe)warn?.(r.id,'原文清除需校正：背景或氣泡範圍無法安全分離');
+      else if(r.kind==='free'&&!flat)warn?.(r.id,'原文清除需校正：網點或畫線上的局部補色可能留痕');
       if(interior)for(let p=0;p<eraseMask.length;p++)eraseMask[p]&&=interior[p];
       const repaired = repairTextBackground(sourcePixels.data, eraseMask, w, h);
-      const mask = glyphBackingMask(text.getImageData(0, 0, w, h).data, w, h, Math.max(2, Math.ceil(size * .09)));
+      const mask = glyphBackingMask(text.getImageData(0, 0, w, h).data, w, h, Math.max(2, Math.ceil(lettering.size * .09)));
       if(interior){
         const glyphData=text.getImageData(0,0,w,h);
         for(let p=0;p<mask.length;p++)if(!interior[p]){mask[p]=0;glyphData.data[p*4+3]=0;}

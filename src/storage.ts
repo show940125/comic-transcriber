@@ -1,11 +1,22 @@
 import { defaults, type Settings, type PageData } from './types';
 import { compatiblePageKey } from './core';
+import {extensionCall} from './extension-context';
 export async function settings(): Promise<Settings> {
-  const result = await chrome.storage.local.get('settings');
-  return { ...defaults, ...(result.settings as Partial<Settings> | undefined) };
+  const result = await extensionCall(()=>chrome.storage.local.get('settings'));
+  const value={ ...defaults, ...(result.settings as Partial<Settings> | undefined) };
+  value.pageConcurrency=value.pageConcurrency===1?1:2;return value;
 }
-export async function saveSettings(value: Settings) { await chrome.storage.local.set({ settings: value }); }
+export async function saveSettings(value: Settings) { await extensionCall(()=>chrome.storage.local.set({ settings: value })); }
+let writeTail:Promise<unknown>=Promise.resolve();
 export async function cachePage(page: PageData) {
+  if(chrome.runtime?.id){const response=await extensionCall(()=>chrome.runtime.sendMessage({channel:'cache-page',page}));if(!response?.ok)throw new Error(response?.error??'頁面快取儲存失敗');return;}
+  return cachePageDirect(page);
+}
+// The service worker owns one cache-index writer across all tabs/documents.
+export function cachePageDirect(page:PageData):Promise<void>{
+  const operation=writeTail.catch(()=>{}).then(()=>extensionCall(()=>writePage(page)));writeTail=operation;return operation;
+}
+async function writePage(page:PageData) {
   const key = `page:${page.hash}:${page.modelKey}`;
   await chrome.storage.local.set({ [key]: page });
   const { pageKeys = [] } = await chrome.storage.local.get<{ pageKeys: string[] }>('pageKeys');
@@ -15,6 +26,9 @@ export async function cachePage(page: PageData) {
   if (aliases.length||keys.length>30) await chrome.storage.local.remove([...aliases,...keys.slice(30)]);
 }
 export async function loadPage(hash: string, modelKey: string): Promise<PageData | undefined> {
+  return extensionCall(()=>readPage(hash,modelKey));
+}
+async function readPage(hash:string,modelKey:string):Promise<PageData|undefined>{
   const key = `page:${hash}:${modelKey}`;
   const exact=(await chrome.storage.local.get(key))[key] as PageData|undefined;if(exact)return exact;
   const {pageKeys=[]}=await chrome.storage.local.get<{pageKeys:string[]}>('pageKeys'),prefix=`page:${hash}:`;

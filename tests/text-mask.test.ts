@@ -2,6 +2,14 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {glyphBackingMask,dilateMask,fillMaskHoles,sourceInkMask,repairTextBackground} from '../src/text-mask';
 const pixels=(w:number,h:number,value:number,alpha=255)=>{const data=new Uint8ClampedArray(w*h*4);for(let p=0;p<w*h;p++){data[p*4]=data[p*4+1]=data[p*4+2]=value;data[p*4+3]=alpha;}return data;};
+test('anchored connected Japanese at a crop boundary is erased while an independent contour stays untouched',()=>{
+  const w=48,h=120,data=pixels(w,h,255),interior=new Uint8Array(w*h).fill(1);
+  for(let y=8;y<108;y++)for(let x=18;x<28;x++)for(let c=0;c<3;c++)data[(y*w+x)*4+c]=0;
+  for(let y=0;y<h;y++)for(let c=0;c<3;c++)data[(y*w+2)*4+c]=0;
+  const mask=sourceInkMask(data,w,h,{textBounds:{x:16,y:8,width:14,height:100},interior});
+  assert.equal(mask.reduce((sum,v)=>sum+v,0),1000);assert.equal(mask[40*w+2],0);
+  const repaired=repairTextBackground(data,mask,w,h);assert.equal(repaired[(40*w+22)*4],255);assert.equal(repaired[(40*w+2)*4],0);
+});
 test('round backing expands glyph edges while leaving diagonal corners unchanged',()=>{
   const mask=new Uint8Array(49);mask[24]=1;const result=dilateMask(mask,7,7,2);assert.equal(result[3*7+1],1);assert.equal(result[1*7+1],0);assert.equal(result[0],0);
 });

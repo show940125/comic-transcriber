@@ -5,7 +5,7 @@ interface Rect {x:number;y:number;width:number;height:number}
 export function bubbleInterior(rgba:Uint8ClampedArray,width:number,height:number,region:Rect):Uint8Array|null {
   const bright=new Uint8Array(width*height),seen=new Uint8Array(bright.length),queue=new Int32Array(bright.length);
   for(let p=0;p<bright.length;p++)bright[p]=+(Math.min(rgba[p*4],rgba[p*4+1],rgba[p*4+2])>=235);
-  let best:number[]|undefined,bestOverlap=0,open:number[]|undefined,openOverlap=0;
+  let best:number[]|undefined,bestScore=0,open:number[]|undefined,openOverlap=0;
   for(let start=0;start<bright.length;start++){
     if(!bright[start]||seen[start])continue;
     let head=0,tail=1,border=false,overlap=0;queue[0]=start;seen[start]=1;
@@ -17,7 +17,9 @@ export function bubbleInterior(rgba:Uint8ClampedArray,width:number,height:number
         if(q>=0&&bright[q]&&!seen[q]){seen[q]=1;queue[tail++]=q;}
       }
     }
-    if(!border&&overlap>bestOverlap&&overlap>=region.width*region.height*.2){bestOverlap=overlap;best=Array.from(queue.subarray(0,tail));}
+    // Prefer white extending beyond the ink anchor over counters inside 口/ロ.
+    const area=region.width*region.height,score=overlap+Math.min(tail-overlap,area*2);
+    if(!border&&score>bestScore&&overlap>=area*.05){bestScore=score;best=Array.from(queue.subarray(0,tail));}
     if(border&&overlap>openOverlap&&overlap>=region.width*region.height*.35){openOverlap=overlap;open=Array.from(queue.subarray(0,tail));}
   }
   if(!best&&!open)return null;
@@ -35,7 +37,9 @@ export function bubbleInterior(rgba:Uint8ClampedArray,width:number,height:number
       border ||= x===0||y===0||x===width-1||y===height-1;
       for(const q of [x?p-1:-1,x<width-1?p+1:-1,y?p-width:-1,y<height-1?p+width:-1])if(q>=0&&!mask[q]&&!holesSeen[q]){holesSeen[q]=1;queue[tail++]=q;}
     }
-    if(!border&&x1-x0<=glyphSide&&y1-y0<=glyphSide&&x1>=region.x&&x0<region.x+region.width&&y1>=region.y&&y0<region.y+region.height)for(let i=0;i<tail;i++)mask[queue[i]]=1;
+    const bw=x1-x0+1,bh=y1-y0+1,inkLike=tail/(bw*bh)<.72||Math.max(bw/bh,bh/bw)>=1.8;
+    const anchored=inkLike&&x0>=region.x-4&&x1<region.x+region.width+4&&y0>=region.y-4&&y1<region.y+region.height+4;
+    if(!border&&(anchored||(x1-x0<=glyphSide&&y1-y0<=glyphSide))&&x1>=region.x&&x0<region.x+region.width&&y1>=region.y&&y0<region.y+region.height)for(let i=0;i<tail;i++)mask[queue[i]]=1;
   }
   return mask;
 }

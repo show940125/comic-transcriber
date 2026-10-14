@@ -9,6 +9,10 @@ function storageFixture(){
  return values;
 }
 function page(hash:string,modelKey:string):PageData{return {schema:1,hash,width:100,height:100,regions:[],title:'',chapter:'',glossary:'',summary:'已翻譯的對白',modelKey};}
+test('concurrent page saves retain both cache keys and both correction payloads',async()=>{
+ const values=storageFixture(),key=contentSignature(defaults),one=page('first',key),two=page('second',key);one.summary='第一張人工校正';two.summary='第二張人工校正';
+ await Promise.all([cachePage(one),cachePage(two)]);assert.equal(values.pageKeys.length,2);assert.equal((await loadPage('first',key))?.summary,one.summary);assert.equal((await loadPage('second',key))?.summary,two.summary);
+});
 test('legacy Google cache restores translated page across unused previous-page summaries',async()=>{
  const values=storageFixture(),current=contentSignature(defaults),legacy=JSON.parse(current);legacy[9]='作品';legacy[12]='先前對白';const key=`page:abc:${JSON.stringify(legacy)}`;
  values[key]=page('abc',JSON.stringify(legacy));values.pageKeys=[key];
