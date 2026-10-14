@@ -81,7 +81,7 @@ npm run dev
 
 程式以 TypeScript、WXT 與 Svelte 建置。Content script 處理原頁圖片、佇列及校正介面；service worker 管理訊息與網路代理；offscreen 文件承載推論 Worker。OCR 採 WASM 與可用的 WebGPU 路徑，重運算放在 Worker。
 
-0.1.9 通過 61 個單元測試與型別檢查，涵蓋大型連通原文、氣泡邊界、橫／直排、context invalidation、兩張佇列與並行快取寫入。Chrome 原創圖像素檢查通過；17 張、固定翻譯延遲的暖機測試，兩張模式中位耗時縮短 19.2%。量測條件、實際漫畫診斷與限制見 [開發文件](docs/development.md)。人工翻譯品質評分另行驗收。
+0.1.9 通過 62 個單元測試與型別檢查，涵蓋大型連通原文、氣泡邊界、橫／直排、context invalidation、兩張佇列與並行快取寫入。Chrome 原創圖像素檢查通過；17 張、固定翻譯延遲的暖機測試，兩張模式中位耗時縮短 19.2%。量測條件、實際漫畫診斷與限制見 [開發文件](docs/development.md)。人工翻譯品質評分另行驗收。
 
 ## 授權
 

@@ -4,7 +4,7 @@ import { imageBase64 } from '../src/binary';
 import { mount, unmount } from 'svelte';
 import Reader from '../src/Reader.svelte';
 import ChapterDock from '../src/ChapterDock.svelte';
-import { chapterImages, imageSource } from '../src/site-images';
+import { chapterImages, imageSource,expectedImageAssignment } from '../src/site-images';
 import type { Diagnostic } from '../src/types';
 import {loadSession,processSession,encodeSession} from '../src/page-pipeline';
 import {runPool,DeferredTranslationError} from '../src/scheduling';
@@ -19,7 +19,7 @@ export default defineContentScript({
     let translating = false, dialog: HTMLDivElement | undefined, priorSummary = '', chapterKey = '';
     let closeDialog: (()=>void) | undefined;
     let batchRunning=false, dock:HTMLDivElement|undefined;
-    const lifetime=new AbortController(),activeImages=new Map<HTMLImageElement,Promise<void>>(),eventDisposers:Array<()=>void>=[];
+    const lifetime=new AbortController(),activeImages=new Map<HTMLImageElement,Promise<void>>(),activeSources=new Map<HTMLImageElement,string>(),eventDisposers:Array<()=>void>=[];
     let activeRun:Promise<void>|undefined,live=true;let disposeDock:(()=>void)|undefined,runAbort:AbortController|undefined,runUrl='';
     function applyImage(image:HTMLImageElement,data:Uint8Array<ArrayBuffer>){
       original.set(image,original.get(image)??imageSource(image));image.dataset.comicOriginal=original.get(image);
@@ -67,7 +67,8 @@ export default defineContentScript({
             throw error;
           }finally{page?.dispose();controller.removeEventListener('abort',cancelWaiting);release();}
         };
-        const task=work();activeImages.set(image,task);try{await task;}finally{activeImages.delete(image);}
+        activeSources.set(image,original.get(image)??imageSource(image));
+        const task=work();activeImages.set(image,task);try{await task;}finally{activeImages.delete(image);activeSources.delete(image);}
       },{stopped,signal:controller,failed:()=>failed});
       activeRun=operation;try{await operation;}finally{if(activeRun===operation)activeRun=undefined;if(runAbort===localAbort)runAbort=undefined;}
     }
@@ -160,6 +161,7 @@ export default defineContentScript({
       if(runAbort&&location.href!==runUrl)runAbort.abort(new DOMException('漫畫章節已變更','AbortError'));
       for (const record of records) if (record.type === 'attributes' && record.target instanceof HTMLImageElement) {
         const image = record.target;
+        if(expectedImageAssignment(image,record.attributeName,activeSources.get(image)))continue;
         if (image.dataset.comicResult === image.src || image.src === (original.get(image)??image.dataset.comicOriginal)) continue;
         if (image.currentSrc !== processed.get(image)) { if(activeImages.has(image))runAbort?.abort(new DOMException('漫畫圖片已變更','AbortError'));original.delete(image); processed.delete(image);if(image.dataset.comicResult)URL.revokeObjectURL(image.dataset.comicResult);delete image.dataset.comicOriginal;delete image.dataset.comicResult;delete image.dataset.comicReview;if (image.complete) { queue.add(image); detached(async()=>{const conf=await settings();if(conf.auto)await drain();}); } }
       }

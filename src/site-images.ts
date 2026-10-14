@@ -1,4 +1,7 @@
 /** Select chapter panels in document order, keeping lazy-loaded pages eligible. */
+export function expectedImageAssignment(image:Pick<HTMLImageElement,'src'> & Partial<Pick<HTMLImageElement,'srcset'>>,attribute:string|null,expected?:string):boolean {
+  return (attribute==='src'||attribute==='srcset'&&!image.srcset?.trim())&&!!expected&&image.src===expected;
+}
 export function imageSource(image:HTMLImageElement):string {
   const source=image.dataset.comicOriginal || image.dataset.src || image.dataset.original || image.currentSrc || image.src;
   return source ? new URL(source,image.ownerDocument.baseURI).href : '';
