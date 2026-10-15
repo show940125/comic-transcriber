@@ -5,6 +5,7 @@ import {chromeTranslate,chromeTranslatorAvailability,disposeChromeTranslator,chr
 import {SerialLane} from '../../src/scheduling';
 import {IdleRuntime} from '../../src/idle-runtime';
 import {geminiTranslate,anonymousGemini} from '../../src/gemini-web';
+import {refineChapter} from '../../src/chapter-refinement';
 import {defaults,type Region} from '../../src/types';
 let worker:Worker|undefined;
 let lastWorkerState:Record<string,unknown>={models:0};
@@ -58,6 +59,12 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
         }catch(error){geminiStopped=true;return {ok:true,result:{status:'blocked',completed,required:30,error:String(error),at:Date.now()}};}
       }
       if(geminiStopped)throw new Error('匿名 Gemini 前一批失敗，待重新驗證後才能恢復');
+      if(message.op==='refine'){
+        if(!Array.isArray(message.pages)||message.pages.length>60)throw new Error('整章校正頁面格式錯誤');
+        const started=performance.now(),progress=(text:string)=>detached(()=>chrome.runtime.sendMessage({channel:'progress',id:message.id,diagnostic:{stage:'translating',message:text,backend:'gemini-web/refinement',model:'網站自動選擇'}}));
+        progress(`整章 ${message.pages.length} 張：送出全部原文與初譯進行二段校正`);
+        try{const result=await refineChapter(message.pages,message.settings,controller.signal,record,(prompt,signal)=>anonymousGemini(prompt,signal,fetch,progress));progress(`完整回覆已核對 ${result.regions} 個區域，準備逐張重排`);return {ok:true,result:{...result,ms:performance.now()-started}};}catch(error){if(!controller.signal.aborted)geminiStopped=true;throw error;}
+      }
       if(!Array.isArray(message.regions)||message.regions.length>300)throw new Error('Gemini 區域格式錯誤');
       const started=performance.now(),progress=(text:string)=>detached(()=>chrome.runtime.sendMessage({channel:'progress',id:message.id,diagnostic:{stage:'translating',message:text,backend:'gemini-web/anonymous',model:'網站自動選擇'}}));progress('匿名 Gemini：依閱讀順序翻譯');
       try{const result=await geminiTranslate(message.regions,message.settings,message.pageHash,controller.signal,record,(prompt,signal)=>anonymousGemini(prompt,signal,fetch,progress));detached(()=>chrome.runtime.sendMessage({channel:'progress',id:message.id,diagnostic:{stage:'complete',message:'匿名 Gemini 翻譯與區域 ID 核對完成',backend:'gemini-web/anonymous',model:'網站自動選擇',ms:performance.now()-started}}));return {ok:true,result};}catch(error){if(!controller.signal.aborted)geminiStopped=true;throw error;}

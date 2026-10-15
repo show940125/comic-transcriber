@@ -4,7 +4,9 @@ import {extensionCall} from './extension-context';
 export async function settings(): Promise<Settings> {
   const result = await extensionCall(()=>chrome.storage.local.get('settings'));
   const value={ ...defaults, ...(result.settings as Partial<Settings> | undefined) };
-  value.pageConcurrency=value.pageConcurrency===1?1:2;return value;
+  value.pageConcurrency=value.pageConcurrency===1?1:2;
+  // Gemini now performs the optional whole-chapter second pass.
+  if(value.backend==='gemini-web')value.backend='google-web';return value;
 }
 export async function saveSettings(value: Settings) { await extensionCall(()=>chrome.storage.local.set({ settings: value })); }
 let writeTail:Promise<unknown>=Promise.resolve();

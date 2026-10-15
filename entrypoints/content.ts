@@ -1,12 +1,13 @@
 import { defineContentScript } from 'wxt/utils/define-content-script';
-import { settings } from '../src/storage';
+import { settings,loadPage } from '../src/storage';
 import { imageBase64 } from '../src/binary';
 import { mount, unmount } from 'svelte';
 import ChapterDock from '../src/ChapterDock.svelte';
 import {draggableDock} from '../src/dock-position';
 import { chapterImages, imageSource,expectedImageAssignment } from '../src/site-images';
-import type { Diagnostic } from '../src/types';
-import {loadSession,processSession,encodeSession} from '../src/page-pipeline';
+import type { Diagnostic,PageData } from '../src/types';
+import {loadSession,processSession,encodeSession,sessionData} from '../src/page-pipeline';
+import {chapterSnapshot,chapterFingerprint,checkedRefinement,refinementContext} from '../src/chapter-refinement';
 import {runPool,DeferredTranslationError,OrderedTurns} from '../src/scheduling';
 import {extensionCall,detached,onContextInvalidated,invalidateContext,contextAlive,watchExtensionContext} from '../src/extension-context';
 import {imageBytes} from '../src/binary';
@@ -17,6 +18,7 @@ export default defineContentScript({
     if(document.documentElement.hasAttribute('data-comic-active'))return;
     document.documentElement.setAttribute('data-comic-active','');
     const original = new WeakMap<HTMLImageElement, string>(), processed = new WeakMap<HTMLImageElement, string>();
+    const chapterDrafts=new WeakMap<HTMLImageElement,PageData>();
     const known = new WeakSet<HTMLImageElement>(), queue = new Set<HTMLImageElement>();
     let translating = false, dialog: HTMLDivElement | undefined, priorSummary = '', chapterKey = '';
     let closeDialog: (()=>void) | undefined;
@@ -56,7 +58,7 @@ export default defineContentScript({
             try{await processSession(page,{progress,signal:controller,beforeTranslate:conf.backend==='gemini-web'?async()=>{await turns.wait(index,controller);if(page!.config.priorSummary!==priorSummary){page!.config.priorSummary=priorSummary;page!.regions.forEach(r=>r.translation='');}}:undefined,canTranslate:()=>!failed,onFailure:()=>{failed=true;}});if(conf.backend==='gemini-web')priorSummary=page.regions.map(r=>r.translation).filter(Boolean).join('\n').slice(-1200);}finally{turns.finish(index);}
             controller.throwIfAborted();if(location.href!==chapterUrl||!image.isConnected||(original.get(image)??imageSource(image))!==source)throw new Error('漫畫頁或圖片已變更，已存文字保留');
             progress({stage:'rendering',message:'嵌字及 PNG 編碼'});const renderStarted=performance.now(),data=await encodeSession(page);progress({stage:'rendering',message:'嵌字及 PNG 完成',ms:performance.now()-renderStarted});controller.throwIfAborted();if(!live)return;
-            applyImage(image,data);image.dataset.comicReview=String(page.regions.filter(r=>r.needsReview||r.warnings.some(w=>/^原文清除需校正|^中文空間不足/.test(w))).length);
+            chapterDrafts.set(image,sessionData(page));applyImage(image,data);image.dataset.comicReview=String(page.regions.filter(r=>r.needsReview||r.warnings.some(w=>/^原文清除需校正|^中文空間不足/.test(w))).length);
             if(limit===1)priorSummary=page.regions.map(r=>r.translation).filter(Boolean).join('\n').slice(-1200);
             progress({stage:'complete',message:'本張完成並已呈現',ms:performance.now()-started});complete();
           }catch(error){
@@ -82,6 +84,43 @@ export default defineContentScript({
         if (url.startsWith('blob:') || url.startsWith('data:')) throw error;
         const response = await extensionCall(()=>chrome.runtime.sendMessage({ channel: 'fetch-image', url })); if (!response.ok) throw new Error(response.error); return response;
       }
+    }
+    async function refineImages(images:HTMLImageElement[],report:(d:Diagnostic)=>void,signal:AbortSignal){
+      const conf=await settings();if(conf.backend!=='google-web')throw new Error('整章二段校正使用 Google 初譯，請將翻譯來源設為 Google');
+      if(!images.length||images.some(i=>!i.dataset.comicResult||!chapterDrafts.has(i)))throw new Error('請先完成本頁全部圖片的初譯；已完成文字可從快取續翻');
+      const sources=images.map(i=>original.get(i)??imageSource(i)),chapterUrl=location.href;
+      const localAbort=new AbortController();runAbort=localAbort;runUrl=chapterUrl;
+      const controller=AbortSignal.any([signal,lifetime.signal,localAbort.signal]),id=crypto.randomUUID();
+      const currentPages=()=>images.map(i=>chapterDrafts.get(i)!);
+      const refreshDrafts=async()=>{for(const image of images){const saved=chapterDrafts.get(image)!;const cached=await loadPage(saved.hash,saved.modelKey);if(cached)chapterDrafts.set(image,cached);}};
+      const assertChapter=()=>{controller.throwIfAborted();const current=chapterImages();if(location.href!==chapterUrl||current.length!==images.length||current.some((i,n)=>i!==images[n]||!i.isConnected||(original.get(i)??imageSource(i))!==sources[n]))throw new Error('漫畫頁或圖片已變更，二段校正不套用');};
+      await refreshDrafts();assertChapter();
+      const input=structuredClone(currentPages()),snapshot=chapterSnapshot(input),fingerprint=await chapterFingerprint(input),contextKey=await refinementContext(conf);
+      if(input.every(p=>p.refinement?.outputFingerprint===fingerprint&&p.refinement.contextKey===contextKey)){report({stage:'complete',message:'整章校正已完成，沿用已存結果'});if(runAbort===localAbort)runAbort=undefined;return;}
+      const readiness=await extensionCall(()=>chrome.runtime.sendMessage({channel:'gemini-status'}));
+      if(!readiness?.ok||!readiness.result?.ready){if(runAbort===localAbort)runAbort=undefined;throw new Error(readiness?.error??'Google 初譯已完成；請先在設定準備匿名 Gemini，才能進行整章校正');}
+      const listener=(m:any)=>{if(m.channel==='progress'&&m.id===id)report(m.diagnostic);};
+      const cancel=()=>{if(contextAlive()){detached(()=>chrome.runtime.sendMessage({channel:'cancel',id}));detached(()=>chrome.runtime.sendMessage({channel:'image-slot-cancel',id}));}};
+      controller.addEventListener('abort',cancel,{once:true});
+      try{
+        assertChapter();const slot=await extensionCall(()=>chrome.runtime.sendMessage({channel:'image-slot-acquire',id}));if(!slot?.ok)throw new Error(slot?.error??'校正排程未回應');
+        await extensionCall(()=>chrome.runtime.onMessage.addListener(listener));assertChapter();
+        report({stage:'translating',message:`Google 初譯完成，Gemini 正在閱讀整章 ${images.length} 張`,backend:'gemini-web/refinement'});
+        const response=await extensionCall(()=>chrome.runtime.sendMessage({channel:'gemini-refine',id,pages:input,settings:conf}));assertChapter();
+        if(!response?.ok)throw new Error(response?.error??'整章校正未回應；保留 Google 初譯');
+        if(response.result.fingerprint!==fingerprint)throw new Error('整章校正輸入指紋不一致');
+        const latest=await settings();if(JSON.stringify([latest.backend,latest.title,latest.chapter,latest.glossary])!==JSON.stringify([conf.backend,conf.title,conf.chapter,conf.glossary]))throw new Error('翻譯設定或術語已變更，舊校正結果不套用');
+        await refreshDrafts();assertChapter();
+        const output=checkedRefinement(currentPages(),snapshot,response.result);
+        // Validate the entire response before changing any displayed page.
+        for(let index=0;index<images.length;index++){
+          assertChapter();const image=images[index],p=output[index];report({stage:'rendering',message:`整章校正核對完成，重排 ${index+1}/${images.length}`,pageIndex:index});
+          const data=await bytes(image),page=await loadSession(new Blob([imageBytes(data.base64)],{type:data.mime}),conf,controller);
+          try{if(page.hash!==p.hash)throw new Error('圖片內容已變更，停止套用校正');page.regions=p.regions;page.metadata={sourcePageUrl:chapterUrl,imageUrl:sources[index],pageIndex:index,refinement:p.refinement};const png=await encodeSession(page);assertChapter();chapterDrafts.set(image,sessionData(page));applyImage(image,png);}
+          finally{page.dispose();}
+        }
+        report({stage:'complete',message:`整章二段校正完成：${response.result.regions} 個區域，修改 ${response.result.changed} 處`,backend:'gemini-web/refinement',ms:response.result.ms});
+      }finally{controller.removeEventListener('abort',cancel);if(contextAlive()){detached(()=>chrome.runtime.onMessage.removeListener(listener));detached(()=>chrome.runtime.sendMessage({channel:'image-slot-release',id}));}if(runAbort===localAbort)runAbort=undefined;}
     }
     async function open(image: HTMLImageElement, auto = false, report?:(diagnostic:Diagnostic)=>void) {
       const {default:Reader}=await import('../src/Reader.svelte');
@@ -113,8 +152,9 @@ export default defineContentScript({
       return new Promise<void>(resolve => {
         let closed=false;
         const close=()=>{if(closed)return;closed=true;void unmount(component).catch(()=>{});holder.remove();if(dialog===holder){dialog=undefined;closeDialog=undefined;}resolve();};
-        const component=mount(Reader,{target:container,props:{siteInput:{...input,auto,priorSummary,sourcePageUrl:location.href,pageIndex:Math.max(0,chapterImages().indexOf(image))},onSiteProgress:report,onSiteBusy:busy=>{for(const control of pager.querySelectorAll('button,select'))(control as HTMLButtonElement).disabled=busy||(control as HTMLElement).dataset.outside==='true';},onSiteReview:count=>{image.dataset.comicReview=String(count);},onSiteSummary:summary=>{if(auto)priorSummary=summary;},onSiteApply:data=>{
-            applyImage(image,data);
+        const component=mount(Reader,{target:container,props:{siteInput:{...input,auto,priorSummary,sourcePageUrl:location.href,pageIndex:Math.max(0,chapterImages().indexOf(image))},onSiteProgress:report,onSiteBusy:busy=>{for(const control of pager.querySelectorAll('button,select'))(control as HTMLButtonElement).disabled=busy||(control as HTMLElement).dataset.outside==='true';},onSiteReview:count=>{image.dataset.comicReview=String(count);},onSiteSummary:summary=>{if(auto)priorSummary=summary;},onSiteApply:(data,page)=>{
+            if(closed||!live||!image.isConnected||(original.get(image)??imageSource(image))!==source)throw new Error('工作台目標圖片已變更，請重新開啟');
+            if(page)chapterDrafts.set(image,page);applyImage(image,data);
             if(auto)close();
           },onSiteError:error=>{image.dataset.comicError=error;if(auto)close();}}});
         if(!auto){const button=document.createElement('button');button.type='button';button.textContent='關閉工作台';button.style.cssText='position:absolute;right:15px;top:5px;z-index:2;font:14px sans-serif;padding:6px 10px;cursor:pointer';button.onclick=close;shadow.append(button);closeDialog=close;}
@@ -145,7 +185,7 @@ export default defineContentScript({
         dock=document.createElement('div');dock.setAttribute('data-comic-dock','');dock.style.cssText='position:fixed;right:16px;bottom:16px;z-index:2147483646;';
         const shadow=dock.attachShadow({mode:'open'});shadow.addEventListener('click',event=>event.stopPropagation());
         const container=document.createElement('div');shadow.append(container);(document.body??document.documentElement).append(dock);
-        const component=mount(ChapterDock,{target:container,props:{getImages:()=>chapterImages(),onRunning:running=>batchRunning=running,runChapter:runImages,openChapter:()=>{const images=chapterImages();const next=images.find(i=>i.dataset.comicError)||images[0];if(next)detached(()=>open(next));},toggleOriginal:()=>{const images=chapterImages().filter(i=>i.dataset.comicResult);const showRaw=images.some(i=>i.src===i.dataset.comicResult);for(const image of images){const raw=original.get(image)||image.dataset.comicOriginal;if(raw&&image.dataset.comicResult){image.srcset='';image.src=showRaw?raw:image.dataset.comicResult;}}}}});
+        const component=mount(ChapterDock,{target:container,props:{getImages:()=>chapterImages(),onRunning:running=>batchRunning=running,runChapter:runImages,refineChapter:refineImages,openChapter:()=>{const images=chapterImages();const next=images.find(i=>i.dataset.comicError)||images[0];if(next)detached(()=>open(next));},toggleOriginal:()=>{const images=chapterImages().filter(i=>i.dataset.comicResult);const showRaw=images.some(i=>i.src===i.dataset.comicResult);for(const image of images){const raw=original.get(image)||image.dataset.comicOriginal;if(raw&&image.dataset.comicResult){image.srcset='';image.src=showRaw?raw:image.dataset.comicResult;}}}}});
         const stopDrag=draggableDock(dock,p=>detached(()=>chrome.storage.local.set({dockPosition:p})));eventDisposers.push(stopDrag);
         detached(async()=>{const {dockPosition}=await chrome.storage.local.get<{dockPosition?:{x:number;y:number}}>('dockPosition');if(dockPosition&&dock){dock.style.left=Math.max(4,Math.min(dockPosition.x,innerWidth-dock.offsetWidth-4))+'px';dock.style.top=Math.max(4,Math.min(dockPosition.y,innerHeight-dock.offsetHeight-4))+'px';dock.style.right=dock.style.bottom='auto';}const state=await chrome.runtime.sendMessage({channel:'tab-tools-state'});toolsHidden=state?.hidden===true;if(toolsHidden&&dock)dock.style.display='none';});
         disposeDock=()=>{void unmount(component).catch(()=>{});dock?.remove();};ctx.onInvalidated(disposeDock);

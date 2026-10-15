@@ -10,11 +10,13 @@ export interface Region {
   bubbleBox?: Rect;
   textDirection?: 'auto' | 'horizontal' | 'vertical';
   fontScale?: number;
+  initialTranslation?:string;
 }
 export interface PageData {
   schema: 1; hash: string; width: number; height: number; regions: Region[];
   title: string; chapter: string; glossary: string; summary: string; modelKey: string;
   sourcePageUrl?:string; imageUrl?:string; pageIndex?:number; savedAt?:number; lastAccessAt?:number;
+  refinement?:{fingerprint:string;outputFingerprint?:string;contextKey?:string;at:number;provider:'gemini-web';promptVersion:number};
 }
 export interface Diagnostic {
   stage: Stage; message: string; backend?: string; model?: string; ms?: number;
@@ -28,6 +30,7 @@ export interface Settings {
   pageConcurrency: 1 | 2;
   wasmThreads: 'auto'|1|2|4;
   autoSites?:string[];
+  refineAfterChapter?:boolean;
 }
 export const defaults: Settings = {
   backend: 'google-web', model: '2b', localFallback: false, endpoint: 'http://127.0.0.1:8080/v1',
@@ -35,6 +38,7 @@ export const defaults: Settings = {
   auto: false, glossary: '', title: '', chapter: '', priorSummary: '',
   pageConcurrency: 2,
   wasmThreads: 'auto',
+  refineAfterChapter: true,
 };
 export type EngineRequest =
   | { op: 'detect'; image: Blob; width: number; height: number }

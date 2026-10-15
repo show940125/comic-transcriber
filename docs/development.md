@@ -167,6 +167,14 @@ python backend/server.py --threads 4
 
 匿名 Gemini 由可見設定頁請求網站權限與啟動 30 批驗證，offscreen 文件持有單一序列。所有請求使用 `credentials: omit`，不接入登入會話或網站可執行程式。診斷資料及未知結果鎖保存本機；403／429、協定變更或不完整回覆會停止後續請求。研究入口與固定輸入／整章速度比較見 [0.1.10 研究報告](research-0.1.10.md)。
 
+## 0.1.11 整章校正
+
+`src/chapter-refinement.ts` 將整章的頁序、原文、初譯與目前譯文組成單一輸入，回覆使用頁面及區域 ID。可校正項目全部核對通過後才回填；模型輸出只能改文字，排版及幾何沿用本機資料。`initialTranslation` 保存每框初譯；`PageData.refinement` 保存輸入／輸出與術語指紋，避免重複請求與過期回覆。
+
+content script 經背景的 `gemini-status` 檢查權限與協定，再送 `gemini-refine`；offscreen 沿用單一 Gemini 請求序列與未知鎖。content script 不直接呼叫僅擴充套件頁可用的 permissions API。初譯設定中的舊 `gemini-web` 值在讀取時改為 `google-web`，整章校正由 `refineAfterChapter` 控制。
+
+工具列使用 Shadow DOM；pointer capture 必須綁定 composedPath 中的拖曳元素。收合與展開透過操作鈕中心及 ResizeObserver 對齊位置。Chrome 驗證與品質界線見 [0.1.11 紀錄](research-0.1.11.md)。
+
 ## 目錄
 
 | 目錄 | 用途 |

@@ -8,11 +8,11 @@
   import { needsOcrReview, ocrReviewWarning } from './ocr-quality';
   import { imageBytes } from './binary';
   import { publicImageUrl } from './core';
-  import {detectSession,ocrSession,translateSession,processSession,saveSession,encodeSession,type PageSession} from './page-pipeline';
+  import {detectSession,ocrSession,translateSession,processSession,saveSession,encodeSession,sessionData,type PageSession} from './page-pipeline';
   import {extensionCall,detached} from './extension-context';
   let { siteInput, onSiteApply, onSiteError, onSiteSummary, onSiteProgress, onSiteBusy, onSiteReview }: {
     siteInput?: {base64?:string; mime?:string; imageUrl?:string; auto?:boolean; priorSummary?:string;sourcePageUrl?:string;pageIndex?:number};
-    onSiteApply?: (bytes:Uint8Array<ArrayBuffer>)=>void;
+    onSiteApply?: (bytes:Uint8Array<ArrayBuffer>,page?:PageData)=>void;
     onSiteError?: (error:string)=>void;
     onSiteSummary?: (summary:string)=>void;
     onSiteProgress?: (diagnostic:Diagnostic)=>void;
@@ -79,7 +79,7 @@
     if (next.naturalWidth * next.naturalHeight > 30_000_000) throw new Error('圖片超過 3000 萬像素，請先裁切');
     image = next; blob = input; filename = name; hash = await hashBlob(input); signature = contentSignature(config);
     const cached = await loadPage(hash, signature); regions = (cached?.regions??[]).map(r=>({...r,bubbleBox:r.bubbleBox??(r.kind==='bubble'?r.ocrBox:undefined),ocrDone:r.ocrDone??(!!r.source.trim()||r.warnings.some(w=>/疑似無文字|缺少日文字元/.test(w)))})); selected = ''; original = false;
-    metadata={sourcePageUrl:siteInput?.sourcePageUrl??cached?.sourcePageUrl,imageUrl:siteInput?.imageUrl??cached?.imageUrl,pageIndex:siteInput?.pageIndex??cached?.pageIndex};
+    metadata={sourcePageUrl:siteInput?.sourcePageUrl??cached?.sourcePageUrl,imageUrl:siteInput?.imageUrl??cached?.imageUrl,pageIndex:siteInput?.pageIndex??cached?.pageIndex,refinement:cached?.refinement};
     message = cached ? '已載入圖片與先前校正' : '圖片已載入，按「偵測文字框」或手動框選'; stage = cached ? 'complete' : 'idle'; paint();
   }
   async function detect(){if(blob&&image)await runStage(page=>detectSession(page,hooks()));}
@@ -99,7 +99,7 @@
     if(!image)return;const page=session(),data=await encodeSession(page,!!siteInput);regions=page.regions;
     aborter?.signal.throwIfAborted();if(!alive)return;
     const summary=regions.map(r=>r.translation).filter(Boolean).join('\n').slice(-1200);
-    if(onSiteApply){onSiteSummary?.(summary);onSiteReview?.(regions.filter(r=>r.needsReview||r.warnings.some(w=>/^原文清除需校正|^中文空間不足/.test(w))).length);onSiteApply(data);message='已套用至漫畫頁';return;}
+    if(onSiteApply){onSiteSummary?.(summary);onSiteReview?.(regions.filter(r=>r.needsReview||r.warnings.some(w=>/^原文清除需校正|^中文空間不足/.test(w))).length);onSiteApply(data,sessionData(page));message='已套用至漫畫頁';return;}
     parent.postMessage({channel:'comic-result',token:location.hash.slice(1),summary,bytes:[...data]},'*');
   }
   function point(event: PointerEvent) {
@@ -116,13 +116,13 @@
   }
   function update(field: keyof Region, value: unknown) {
     if (!image) return;
-    regions = regions.map(r => r.id === selected ? clampRegion({ ...r, ...(['x','y','width','height'].includes(field) ? { ocrBox: undefined,bubbleBox:undefined } : {}), ...(field==='source'?{ocrDone:!!String(value).trim(),translation:value!==r.source?'':r.translation,needsReview:needsOcrReview(String(value)),warnings:[...r.warnings.filter(w=>w!==ocrReviewWarning),...(needsOcrReview(String(value))?[ocrReviewWarning]:[])]}:{}), [field]: value }, image!.naturalWidth, image!.naturalHeight) : r); paint(); detached(save,e=>{error=String(e);});
+    regions = regions.map(r => r.id === selected ? clampRegion({ ...r, ...(['x','y','width','height'].includes(field) ? { ocrBox: undefined,bubbleBox:undefined } : {}), ...(field==='source'?{initialTranslation:undefined,ocrDone:!!String(value).trim(),translation:value!==r.source?'':r.translation,needsReview:needsOcrReview(String(value)),warnings:[...r.warnings.filter(w=>w!==ocrReviewWarning),...(needsOcrReview(String(value))?[ocrReviewWarning]:[])]}:{}), [field]: value }, image!.naturalWidth, image!.naturalHeight) : r); paint(); detached(save,e=>{error=String(e);});
   }
   function remove() { regions = regions.filter(r => r.id !== selected); selected = regions[0]?.id ?? ''; paint(); detached(save,e=>{error=String(e);}); }
   function merge() {
     const a = active, b = regions.find(r => r.order === (a?.order ?? -2) + 1); if (!a || !b) return;
     const x = Math.min(a.x, b.x), y = Math.min(a.y, b.y);
-    const r = { ...a, ocrBox: undefined,bubbleBox:undefined, x, y, width: Math.max(a.x + a.width, b.x + b.width) - x, height: Math.max(a.y + a.height, b.y + b.height) - y, source: a.source + b.source, translation: [a.translation, b.translation].filter(Boolean).join('\n') };
+    const r = { ...a, initialTranslation:undefined,ocrBox: undefined,bubbleBox:undefined, x, y, width: Math.max(a.x + a.width, b.x + b.width) - x, height: Math.max(a.y + a.height, b.y + b.height) - y, source: a.source + b.source, translation: [a.translation, b.translation].filter(Boolean).join('\n') };
     regions = regions.filter(v => v.id !== b.id).map(v => v.id === a.id ? r : v); paint(); detached(save,e=>{error=String(e);});
   }
   function exportJson() { if (!image) return; download(new Blob([JSON.stringify({ schema: 1, hash, width: image.naturalWidth, height: image.naturalHeight, regions: $state.snapshot(regions), diagnostics }, null, 2)], { type: 'application/json' }), `${filename}.json`); }
@@ -188,6 +188,7 @@
       {#if active}
         <label>日文原文<textarea aria-label="日文原文" rows="4" value={active.source} oninput={e => update('source', e.currentTarget.value)} disabled={busy}></textarea></label>
         <label>繁中譯文<textarea aria-label="繁中譯文" rows="4" value={active.translation} oninput={e => update('translation', e.currentTarget.value)} disabled={busy}></textarea></label>
+        {#if active.initialTranslation!==undefined}<details><summary>Google 初譯</summary><p>{active.initialTranslation}</p><button disabled={busy} onclick={()=>update('translation',active!.initialTranslation!)}>還原此框初譯</button></details>{/if}
         <div class="coords">{#each ['x', 'y', 'width', 'height', 'order'] as field}<label>{({x:'X',y:'Y',width:'寬',height:'高',order:'順序'} as any)[field]}<input type="number" aria-label={field} value={(active as any)[field]} disabled={busy} oninput={e => { const n = Number(e.currentTarget.value); if (Number.isFinite(n)) update(field as keyof Region, Math.max(0, n)); }} /></label>{/each}</div>
         <label>呈現方式<select aria-label="呈現方式" value={active.render} disabled={busy} onchange={e => update('render', e.currentTarget.value)}><option value="auto">字形白底／局部遮蓋原文</option><option value="overlay">字形白底（浮層）</option><option value="rectangle">矩形浮層（舊方式）</option><option value="fill">手動確認擦成白底</option></select></label>
         <label>中文方向<select aria-label="中文方向" value={active.textDirection??'auto'} disabled={busy} onchange={e=>update('textDirection',e.currentTarget.value)}><option value="auto">自動橫／直排</option><option value="horizontal">橫排</option><option value="vertical">直排（右至左）</option></select></label>

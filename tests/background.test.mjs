@@ -25,6 +25,14 @@ test('pause release drains an active inference and a new job waits for closing b
 test('Gemini stays gated before protocol validation without waking the model runtime',async()=>{
  const f=await fixture(),result=await f.send({channel:'gemini-translate',regions:[],pageHash:'p'});assert.equal(result.ok,false);assert.match(result.error,/30 批/);assert(!f.events.includes('create'));delete globalThis.chrome;
 });
+test('whole-chapter Gemini uses the validation gate and offscreen refinement operation',async()=>{
+ const f=await fixture();const blocked=await f.send({channel:'gemini-refine',pages:[]});assert.equal(blocked.ok,false);assert(!f.events.includes('create'));
+ f.data.geminiValidation={status:'passed'};const result=await f.send({channel:'gemini-refine',pages:[],settings:{}});assert.equal(result.ok,true);assert(f.events.includes('offscreen-gemini'));delete globalThis.chrome;
+});
+test('content scripts can check Gemini readiness through the background without loading inference',async()=>{
+ const f=await fixture();const first=await f.send({channel:'gemini-status'},'https://example.com/chapter');assert.equal(first.result.ready,false);
+ f.data.geminiValidation={status:'passed'};const ready=await f.send({channel:'gemini-status'},'https://example.com/chapter');assert.equal(ready.result.ready,true);assert(!f.events.includes('create'));delete globalThis.chrome;
+});
 test('Google 429 blocks queued requests across pages until explicit manual resume',async()=>{
  const f=await fixture(),original=globalThis.fetch;let calls=0;globalThis.fetch=async()=>{calls++;return new Response(calls===1?null:'[[["你好"]]]',{status:calls===1?429:200});};
  try{const [one,two]=await Promise.all([f.send({channel:'google-text',id:'one',source:'こんにちは'}),f.send({channel:'google-text',id:'two',source:'さようなら'})]);assert.equal(one.status,429);assert.equal(two.ok,false);assert.match(two.error,/429/);assert.equal(calls,1);await f.send({channel:'translation-resume'});const next=await f.send({channel:'google-text',id:'next',source:'こんにちは'});assert.equal(next.status,200);assert.equal(calls,2);}finally{globalThis.fetch=original;delete globalThis.chrome;}

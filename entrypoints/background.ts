@@ -43,6 +43,9 @@ export default defineBackground(() => {
   chrome.runtime.onMessage.addListener((message, sender, reply) => {
     if (sender.id !== chrome.runtime.id) return;
     if(message.channel==='runtime-heartbeat'){reply({ok:true});return;}
+    if(message.channel==='gemini-status'){
+      (async()=>{const {geminiValidation}=await chrome.storage.local.get('geminiValidation'),permission=await chrome.permissions.contains({origins:[geminiOrigin]}),protocolPassed=(geminiValidation as any)?.status==='passed';return {ok:true,result:{ready:permission&&protocolPassed,permission,protocolPassed}};})().then(reply,e=>reply({ok:false,error:String(e)}));return true;
+    }
     if(message.channel==='translation-resume'){googleBlocked=0;googleBlockLoaded=true;chrome.storage.session.remove('googleBlockedStatus').then(()=>reply({ok:true}),e=>reply({ok:false,error:String(e)}));return true;}
     if(message.channel==='gemini-record'){
       if(sender.url!==chrome.runtime.getURL('/offscreen.html'))return;
@@ -63,18 +66,18 @@ export default defineBackground(() => {
       if(sender.url!==chrome.runtime.getURL('/offscreen.html'))return;
       storageWrite(()=>chrome.storage.local.set({geminiValidationProgress:{completed:message.completed,total:message.total,sample:message.sample,phase:message.phase}})).then(()=>reply({ok:true}),e=>reply({ok:false,error:String(e)}));return true;
     }
-    if(message.channel==='gemini-validate'||message.channel==='gemini-translate'){
+    if(message.channel==='gemini-validate'||message.channel==='gemini-translate'||message.channel==='gemini-refine'){
       const task=async()=>{
         if(maintenance)throw new Error('快取維護中');
         if(!await chrome.permissions.contains({origins:[geminiOrigin]}))throw new Error('請先在設定頁核准匿名 Gemini 網站權限');
         if(message.channel==='gemini-validate'&&!sender.url?.startsWith(chrome.runtime.getURL('/options.html')))throw new Error('請從可見設定頁啟動匿名實測');
-        if(message.channel==='gemini-translate'){const {geminiValidation}=await chrome.storage.local.get('geminiValidation');if((geminiValidation as any)?.status!=='passed')throw new Error('匿名 Gemini 尚未通過 30 批實測；請先在設定頁執行研究驗證');}
+        if(message.channel!=='gemini-validate'){const {geminiValidation}=await chrome.storage.local.get('geminiValidation');if((geminiValidation as any)?.status!=='passed')throw new Error('匿名 Gemini 尚未通過 30 批實測；請先在設定頁執行研究驗證');}
         const validating=message.channel==='gemini-validate';if(validating&&geminiValidationRunning)throw new Error('匿名驗證已在另一個設定頁進行');if(validating)geminiValidationRunning=true;
         const id=message.id??crypto.randomUUID(),done=lease('gemini:'+id);
         if(sender.tab?.id!=null)owners.set(id,{tabId:sender.tab.id,frameId:sender.frameId??0});
-        try{await offscreen();const response=await chrome.runtime.sendMessage({...message,id,channel:'offscreen-gemini',op:message.channel==='gemini-validate'?'validate':'translate'});
+        try{await offscreen();const response=await chrome.runtime.sendMessage({...message,id,channel:'offscreen-gemini',op:message.channel==='gemini-validate'?'validate':message.channel==='gemini-refine'?'refine':'translate'});
           if(message.channel==='gemini-validate'&&response?.ok)await storageWrite(()=>chrome.storage.local.set({geminiValidation:response.result}));
-          if(message.channel==='gemini-translate'&&!response?.ok&&!/AbortError|已取消/.test(response?.error??''))await storageWrite(()=>chrome.storage.local.set({geminiValidation:{status:'blocked',completed:0,required:30,error:response?.error??'匿名翻譯未回應',at:Date.now()}}));return response;
+          if(message.channel!=='gemini-validate'&&!response?.ok&&!/AbortError|已取消/.test(response?.error??''))await storageWrite(()=>chrome.storage.local.set({geminiValidation:{status:'blocked',completed:0,required:30,error:response?.error??'匿名翻譯未回應',at:Date.now()}}));return response;
         }finally{if(validating)geminiValidationRunning=false;owners.delete(id);done();}
       };task().then(reply,e=>reply({ok:false,error:String(e)}));return true;
     }

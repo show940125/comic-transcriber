@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {cachePage,loadPage} from '../src/storage';
+import {cachePage,loadPage,settings} from '../src/storage';
 import {contentSignature} from '../src/core';
 import {defaults,type PageData} from '../src/types';
 function storageFixture(){
@@ -12,6 +12,9 @@ function page(hash:string,modelKey:string):PageData{return {schema:1,hash,width:
 test('concurrent page saves retain both cache keys and both correction payloads',async()=>{
  const values=storageFixture(),key=contentSignature(defaults),one=page('first',key),two=page('second',key);one.summary='第一張人工校正';two.summary='第二張人工校正';
  await Promise.all([cachePage(one),cachePage(two)]);assert.equal(values.pageKeys.length,2);assert.equal((await loadPage('first',key))?.summary,one.summary);assert.equal((await loadPage('second',key))?.summary,two.summary);
+});
+test('legacy Gemini primary selection becomes Google while enabling the separate chapter pass',async()=>{
+ const values=storageFixture();values.settings={...defaults,backend:'gemini-web'};const value=await settings();assert.equal(value.backend,'google-web');assert.equal(value.refineAfterChapter,true);
 });
 test('editing a legacy cached page keeps source metadata and corrections without retranslation',async()=>{
  const values=storageFixture(),key=contentSignature(defaults),original=page('kept',key);Object.assign(original,{sourcePageUrl:'https://example.com/chapter',imageUrl:'https://example.com/page.png',pageIndex:3,savedAt:123});
