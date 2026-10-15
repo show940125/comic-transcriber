@@ -8,10 +8,15 @@ import { traditional } from './language';
 import { needsOcrReview, ocrReviewWarning } from './ocr-quality';
 import { imageBase64 } from './binary';
 import { createGpuProbe } from './gpu';
+import {resolveThreads} from './idle-runtime';
+let runtimeConfigured=false,threadInfo=resolveThreads('auto',globalThis.crossOriginIsolated,typeof SharedArrayBuffer!=='undefined'),pthreadCount=0;
+const PlatformWorker=globalThis.Worker;
+if(PlatformWorker)globalThis.Worker=class extends PlatformWorker{constructor(url:string|URL,options?:WorkerOptions){super(url,options);if(options?.name==='em-pthread')pthreadCount++;}};
 let base = '', current = '';
 let tail: Promise<unknown> = Promise.resolve();
 const aborts = new Map<string, AbortController>();
 const sessions = new Map<string, { session: ort.InferenceSession; backend: string; bytes: ArrayBuffer }>();
+const runtimeInfo=()=>({...threadInfo,crossOriginIsolated:globalThis.crossOriginIsolated,sharedArrayBuffer:typeof SharedArrayBuffer!=='undefined',spawnedPthreads:pthreadCount,effectiveThreads:ort.env.wasm.numThreads,models:sessions.size+(llm?1:0),llmLoaded:!!llm});
 let llm: MLCEngine | undefined, loadedId = '', vocab: string[] = [];
 const report = (d: Diagnostic) => postMessage({ type: 'progress', id: current, diagnostic: d });
 function check(signal: AbortSignal) { signal.throwIfAborted(); }
@@ -30,7 +35,7 @@ async function artifact(model: string, name: string, signal: AbortSignal): Promi
     const digest = await crypto.subtle.digest('SHA-256', bytes);
     const hash = [...new Uint8Array(digest)].map(v => v.toString(16).padStart(2, '0')).join('');
     if (spec.sha256 && hash !== spec.sha256) throw new Error(`模型雜湊錯誤：${name}`);
-    await cache.put(spec.url, new Response(bytes)); return bytes;
+    await cache.put(spec.url, new Response(bytes));postMessage({type:'cache-record',record:{cache:'comic-vision-v1',url:spec.url,bytes:bytes.byteLength,measuredAt:Date.now(),verified:!!spec.sha256}});return bytes;
   }
   const bytes = await response.arrayBuffer();
   if (spec.sha256) {
@@ -45,7 +50,7 @@ async function session(model: string, name: string, signal: AbortSignal, wasmOnl
   const bytes = await artifact(model, name, signal); check(signal);
   ort.env.wasm.wasmPaths = `${base}ort/`;
   // Single-thread is a tested baseline when extension isolation cannot enable threads.
-  ort.env.wasm.numThreads = 1;
+  ort.env.wasm.numThreads = threadInfo.threads;
   let backend = model === 'detector' || wasmOnly ? 'wasm' : (await capability()).available ? 'webgpu+wasm' : 'wasm';
   let instance: ort.InferenceSession;
   try { instance = await ort.InferenceSession.create(bytes, { executionProviders: backend === 'wasm' ? ['wasm'] : ['webgpu', 'wasm'] }); }
@@ -54,7 +59,7 @@ async function session(model: string, name: string, signal: AbortSignal, wasmOnl
     report({ stage: 'loading', message: '此模型 GPU 建立失敗，改用 WASM', model: name, backend: 'wasm' });
     backend = 'wasm'; instance = await ort.InferenceSession.create(bytes, { executionProviders: ['wasm'] });
   }
-  const value = { session: instance, backend, bytes }; sessions.set(key, value); return value;
+  const value = { session: instance, backend, bytes }; sessions.set(key, value);postMessage({type:'runtime-snapshot',result:runtimeInfo()});return value;
 }
 async function run(value: Awaited<ReturnType<typeof session>>, feeds: Record<string, ort.Tensor>, signal: AbortSignal) {
   check(signal);
@@ -154,7 +159,7 @@ async function loadLlm(modelId: string, signal: AbortSignal) {
     appConfig: { model_list: [{ ...config, model_lib: base + config.model_lib.slice(1) }] },
     initProgressCallback: p => report({ stage: 'loading', message: p.text, backend: 'webgpu', model: modelId }),
   });
-  loadedId = modelId; check(signal); return llm;
+  loadedId = modelId;postMessage({type:'runtime-snapshot',result:runtimeInfo()});postMessage({type:'models-ready'});check(signal);return llm;
 }
 async function translate(request: Extract<EngineRequest, { op: 'translate' }>, signal: AbortSignal) {
   const regions = request.regions.filter(r => r.source.trim()&&!r.needsReview&&!needsOcrReview(r.source)).sort((a, b) => a.order - b.order);
@@ -210,9 +215,10 @@ async function translate(request: Extract<EngineRequest, { op: 'translate' }>, s
 }
 async function handle(request: EngineRequest, signal: AbortSignal) {
   switch (request.op) {
+    case 'runtime-info': return runtimeInfo();
     case 'probe': return capability(request.refresh);
     case 'release-llm':
-      if(llm)await llm.unload().catch(()=>{});llm=undefined;loadedId='';return {released:true};
+      if(llm)await llm.unload().catch(()=>{});llm=undefined;loadedId='';postMessage({type:'runtime-snapshot',result:runtimeInfo()});return {released:true};
     case 'detect': return detect(request, signal);
     case 'ocr': return recognize(request, signal);
     case 'local-ocr': {
@@ -231,9 +237,10 @@ onmessage = ({ data }) => {
   if (data.cancel) { aborts.get(data.cancel)?.abort(); if (current === data.cancel) llm?.interruptGenerate(); return; }
   const controller = new AbortController(); aborts.set(data.id, controller);
   const operation = async () => {
+    if(!runtimeConfigured){threadInfo=resolveThreads(data.runtimeOptions?.wasmThreads??'auto',globalThis.crossOriginIsolated,typeof SharedArrayBuffer!=='undefined');if(data.runtimeOptions?.fallbackReason)threadInfo.reason=data.runtimeOptions.fallbackReason;runtimeConfigured=true;}
     base = data.base; current = data.id;
     try { const result = await handle(data.request, controller.signal); postMessage({ id: data.id, ok: true, result }); }
-    catch (error) { postMessage({ id: data.id, ok: false, error: error instanceof Error ? error.message : String(error), modelOutput: (error as { modelOutput?: string })?.modelOutput }); }
+    catch (error) { const reason=error instanceof Error?error.message:String(error);postMessage({ id: data.id, ok: false, error:reason,retrySingleThread:threadInfo.threads>1&&sessions.size===0&&/pthread|SharedArrayBuffer|worker|failed to initialize|no available backend/i.test(reason),modelOutput: (error as { modelOutput?: string })?.modelOutput }); }
     finally { aborts.delete(data.id); current = ''; }
   };
   tail = tail.catch(() => {}).then(operation);

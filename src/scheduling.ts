@@ -4,6 +4,12 @@ export class SerialLane {
     const task=this.tail.catch(()=>{}).then(()=>{signal?.throwIfAborted();return work();});this.tail=task;return task;
   }
 }
+/** OCR may finish out of order; context-sensitive translation waits by page. */
+export class OrderedTurns {
+  private current=0;private done=new Set<number>();private listeners=new Set<()=>void>();
+  wait(index:number,signal?:AbortSignal):Promise<void>{signal?.throwIfAborted();if(index<=this.current)return Promise.resolve();return new Promise((resolve,reject)=>{const clean=()=>{this.listeners.delete(check);signal?.removeEventListener('abort',abort);};const check=()=>{if(index<=this.current){clean();resolve();}};const abort=()=>{clean();reject(signal?.reason);};this.listeners.add(check);signal?.addEventListener('abort',abort,{once:true});});}
+  finish(index:number){this.done.add(index);while(this.done.delete(this.current))this.current++;for(const listener of [...this.listeners])listener();}
+}
 export interface PoolControl { stopped:()=>boolean; signal?:AbortSignal; failed?:()=>boolean }
 // One pool serves visible-page and chapter requests. Errors stop admissions;
 // already-started tasks may finish OCR/cache work before settling.

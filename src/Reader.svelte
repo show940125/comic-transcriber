@@ -11,7 +11,7 @@
   import {detectSession,ocrSession,translateSession,processSession,saveSession,encodeSession,type PageSession} from './page-pipeline';
   import {extensionCall,detached} from './extension-context';
   let { siteInput, onSiteApply, onSiteError, onSiteSummary, onSiteProgress, onSiteBusy, onSiteReview }: {
-    siteInput?: {base64?:string; mime?:string; imageUrl?:string; auto?:boolean; priorSummary?:string};
+    siteInput?: {base64?:string; mime?:string; imageUrl?:string; auto?:boolean; priorSummary?:string;sourcePageUrl?:string;pageIndex?:number};
     onSiteApply?: (bytes:Uint8Array<ArrayBuffer>)=>void;
     onSiteError?: (error:string)=>void;
     onSiteSummary?: (summary:string)=>void;
@@ -29,6 +29,7 @@
   let alive=true;
   let fontReady = $state(false), imageUrl = '', signature = '';
   let remoteImageUrl = $state(''), permissionOrigin = $state('');
+  let metadata:PageSession['metadata'];
   async function loadRemote() {
     if (!remoteImageUrl) return;
     const response = await extensionCall(()=>chrome.runtime.sendMessage({ channel:'fetch-image', url:remoteImageUrl }));
@@ -66,7 +67,7 @@
   }
   function session():PageSession {
     if(!blob||!image)throw new Error('請先載入圖片');
-    return {blob,image,regions:$state.snapshot(regions),hash,modelKey:signature,config:$state.snapshot(config)};
+    return {blob,image,regions:$state.snapshot(regions),hash,modelKey:signature,config:$state.snapshot(config),metadata};
   }
   const hooks=()=>({progress,signal:aborter?.signal,partial:(value:Region[])=>{if(alive){regions=value;paint();}}});
   async function runStage(work:(page:PageSession)=>Promise<void>){const page=session();try{await work(page);}finally{if(alive){regions=page.regions;signature=page.modelKey;}}}
@@ -78,17 +79,19 @@
     if (next.naturalWidth * next.naturalHeight > 30_000_000) throw new Error('圖片超過 3000 萬像素，請先裁切');
     image = next; blob = input; filename = name; hash = await hashBlob(input); signature = contentSignature(config);
     const cached = await loadPage(hash, signature); regions = (cached?.regions??[]).map(r=>({...r,bubbleBox:r.bubbleBox??(r.kind==='bubble'?r.ocrBox:undefined),ocrDone:r.ocrDone??(!!r.source.trim()||r.warnings.some(w=>/疑似無文字|缺少日文字元/.test(w)))})); selected = ''; original = false;
+    metadata={sourcePageUrl:siteInput?.sourcePageUrl??cached?.sourcePageUrl,imageUrl:siteInput?.imageUrl??cached?.imageUrl,pageIndex:siteInput?.pageIndex??cached?.pageIndex};
     message = cached ? '已載入圖片與先前校正' : '圖片已載入，按「偵測文字框」或手動框選'; stage = cached ? 'complete' : 'idle'; paint();
   }
   async function detect(){if(blob&&image)await runStage(page=>detectSession(page,hooks()));}
   async function ocr(){if(blob)await runStage(page=>ocrSession(page,hooks()));}
   async function translate(){
-    if(config.backend==='chrome'&&!siteInput)await prepareChromeTranslator(progress,aborter?.signal);
+    if(!siteInput?.auto)await extensionCall(()=>chrome.runtime.sendMessage({channel:'translation-resume'}));
+    if(config.backend==='chrome'&&!siteInput){await prepareChromeTranslator(progress,aborter?.signal);disposeChromeTranslator();}
     await runStage(page=>translateSession(page,hooks()));
   }
   async function translatePage(){
-    if(!image)return;original=false;
-    if(config.backend==='chrome'&&!siteInput)await prepareChromeTranslator(progress,aborter?.signal);
+    if(!image)return;original=false;if(!siteInput?.auto)await extensionCall(()=>chrome.runtime.sendMessage({channel:'translation-resume'}));
+    if(config.backend==='chrome'&&!siteInput){await prepareChromeTranslator(progress,aborter?.signal);disposeChromeTranslator();}
     await runStage(page=>processSession(page,hooks()));
     progress({stage:regions.some(r=>r.needsReview)?'review':'complete',message:regions.some(r=>r.needsReview)?'部分原文需核對，其餘譯文已保留':'本張處理完成，可校正或匯出'});
   }
@@ -194,7 +197,7 @@
       {:else}<p class="hint">點選圖片上的文字框；拖曳手動框選或以座標欄調整大小。</p>{/if}
       <div class="export">{#if parent !== window || onSiteApply}<button disabled={!canvas || busy} onclick={() => action(applyToPage)}>套用至漫畫頁</button>{/if}<button disabled={!canvas || busy} onclick={() => canvas?.toBlob(b => { if (b) download(b, `${filename}-translated.png`); }, 'image/png')}>匯出 PNG</button><button disabled={!image || busy} onclick={exportJson}>匯出校正 JSON</button></div>
       <details><summary>本頁執行紀錄</summary>{#each diagnostics as d}<p class="diagnostic">{d.message}<small>{d.backend ?? ''} {d.model ?? ''} {d.ms ? `${Math.round(d.ms)} ms` : ''}</small></p>{/each}</details>
-      <small class="privacy">{config.backend === 'google-web' ? 'Google 網頁翻譯僅傳送 OCR 文字，圖片與嵌字留在本機。免金鑰、零 API 費。' : '目前翻譯模式在本機處理；首次使用會下載模型，本機服務僅連到設定的 localhost。'}</small>
+      <small class="privacy">{config.backend === 'google-web' ? 'Google 網頁翻譯僅傳送 OCR 文字，圖片與嵌字留在本機。免金鑰、零 API 費。' : config.backend==='gemini-web' ? '匿名 Gemini 僅傳送 OCR 文字、術語與前頁摘要，所有請求省略帳號憑證；圖片與嵌字留在本機。' : '目前翻譯模式在本機處理；首次使用會下載模型，本機服務僅連到設定的 localhost。'}</small>
     </aside>
   </div>
 </main>

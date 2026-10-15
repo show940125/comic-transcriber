@@ -26,7 +26,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         self.respond(200 if self.path == '/health' else 404)
-        self.wfile.write(json.dumps({'ok': self.path == '/health', 'backend': 'onnxruntime-cpu', 'version': '0.1.0'}).encode())
+        self.wfile.write(json.dumps({'ok': self.path == '/health', 'backend': 'onnxruntime-cpu', 'threads':vision.threads, 'version': '0.1.10'}).encode())
 
     def do_POST(self):
         if not self.allowed_origin() or self.path != '/ocr':
@@ -67,6 +67,8 @@ class Handler(BaseHTTPRequestHandler):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--port', type=int, default=8766)
+    parser.add_argument('--threads', type=int, choices=(1, 2, 4), default=4)
     args = parser.parse_args()
+    vision = Vision(args.threads)
     print(f'OCR service: http://127.0.0.1:{args.port} (foreground; Ctrl+C to stop)', flush=True)
     HTTPServer(('127.0.0.1', args.port), Handler).serve_forever()

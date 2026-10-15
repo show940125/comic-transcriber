@@ -1,6 +1,7 @@
 import type { Region, Diagnostic } from './types';
 import { traditional } from './language';
 let ready:any,pending:Promise<any>|undefined,creationSignal:AbortSignal|undefined,generation=0,initialization:AbortController|undefined;
+export function chromeTranslatorState(){return {translatorLoaded:!!ready,translatorLoading:!!pending};}
 export async function chromeTranslatorAvailability():Promise<{status:'unavailable'|'downloadable'|'downloading'|'available';reason?:string}>{
   const api=(globalThis as any).Translator;if(!api)return {status:'unavailable',reason:'此文件未提供 Chrome Translator API'};
   try{const status=await api.availability({sourceLanguage:'ja',targetLanguage:'zh-Hant'});return ['unavailable','downloadable','downloading','available'].includes(status)?{status}:{status:'unavailable',reason:'Chrome 回傳未知語言包狀態'};}

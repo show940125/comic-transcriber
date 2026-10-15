@@ -22,4 +22,6 @@ Exact runtime asset identities are in artifacts/model-lock.json. A distribution 
 
 Chrome's optional Translator API and its language packs are managed by the browser and are not redistributed in this package. The anonymous Google web translation endpoint is an optional network service, with no API key or billing integration and no availability guarantee.
 
+The independent anonymous Gemini adapter uses public protocol observations from the MIT-licensed https://github.com/Sophomoresty/gemini-web2api as a reference. It omits account cookies, model-tier overrides and authentication headers. Gemini is an optional third-party website service; no Google client executable code is downloaded or executed by this adapter.
+
 The private research corpus Give My Regards to Black Jack / SHUHO SATO comes from the author's official publication at https://densho810.com/free/. Manga pages and translated derivatives are excluded from the extension distribution. Public derivative release requires separate compliance with the author's attribution and reporting conditions recorded in artifacts/real-corpus/manifest.json.

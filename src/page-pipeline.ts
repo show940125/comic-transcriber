@@ -7,21 +7,21 @@ import {googleWebTranslate} from './google-web';
 import {extensionCall,detached,contextAlive} from './extension-context';
 import {renderPage,loadFont} from './render';
 import {SerialLane,DeferredTranslationError} from './scheduling';
-export interface PageSession {blob:Blob;image:HTMLImageElement;regions:Region[];hash:string;modelKey:string;config:Settings}
-export interface PageHooks {progress?:(d:Diagnostic)=>void;partial?:(regions:Region[])=>void;canTranslate?:()=>boolean;onFailure?:(error:unknown)=>void;signal?:AbortSignal}
+export interface PageSession {blob:Blob;image:HTMLImageElement;regions:Region[];hash:string;modelKey:string;config:Settings;metadata?:Pick<PageData,'sourcePageUrl'|'imageUrl'|'pageIndex'>}
+export interface PageHooks {progress?:(d:Diagnostic)=>void;partial?:(regions:Region[])=>void;beforeTranslate?:()=>Promise<void>;canTranslate?:()=>boolean;onFailure?:(error:unknown)=>void;signal?:AbortSignal}
 const translationLane=new SerialLane();
 export async function loadSession(blob:Blob,config:Settings,signal?:AbortSignal):Promise<PageSession&{dispose:()=>void}>{
   if(blob.size>20*1024*1024||!blob.type.startsWith('image/'))throw new Error('請使用 20 MB 以內的圖片');
   signal?.throwIfAborted();const url=URL.createObjectURL(blob),image=new Image();
   try{image.src=url;await image.decode();signal?.throwIfAborted();if(image.naturalWidth*image.naturalHeight>30_000_000)throw new Error('圖片超過 3000 萬像素，請先裁切');
     const hash=await hashBlob(blob),modelKey=contentSignature(config),cached=await loadPage(hash,modelKey);
-    return {blob,image,hash,modelKey,config:{...config},regions:(cached?.regions??[]).map(r=>({...r,bubbleBox:r.bubbleBox??(r.kind==='bubble'?r.ocrBox:undefined),ocrDone:r.ocrDone??(!!r.source.trim()||r.warnings.some(w=>/疑似無文字|缺少日文字元/.test(w)))})),dispose:()=>{URL.revokeObjectURL(url);image.src='';}};
+    return {blob,image,hash,modelKey,config:{...config},metadata:cached?{sourcePageUrl:cached.sourcePageUrl,imageUrl:cached.imageUrl,pageIndex:cached.pageIndex}:undefined,regions:(cached?.regions??[]).map(r=>({...r,bubbleBox:r.bubbleBox??(r.kind==='bubble'?r.ocrBox:undefined),ocrDone:r.ocrDone??(!!r.source.trim()||r.warnings.some(w=>/疑似無文字|缺少日文字元/.test(w)))})),dispose:()=>{URL.revokeObjectURL(url);image.src='';}};
   }catch(error){URL.revokeObjectURL(url);throw error;}
 }
 export async function saveSession(session:PageSession){
   const {image,config}=session;session.modelKey=contentSignature(config);
   const page:PageData={schema:1,hash:session.hash,width:image.naturalWidth,height:image.naturalHeight,regions:structuredClone(session.regions),title:config.title,chapter:config.chapter,glossary:config.glossary,summary:session.regions.filter(r=>r.translation).map(r=>r.translation).join('\n').slice(0,1500),modelKey:session.modelKey};
-  await cachePage(page);
+  Object.assign(page,session.metadata,{savedAt:Date.now()});await cachePage(page);
 }
 export async function detectSession(session:PageSession,hooks:PageHooks={}){
   session.regions=await engine({op:'detect',image:session.blob,width:session.image.naturalWidth,height:session.image.naturalHeight},hooks.progress,hooks.signal);await saveSession(session);
@@ -51,23 +51,26 @@ export async function translateSession(session:PageSession,hooks:PageHooks={}){
     if(conf.backend==='google-web'){
       try{session.regions=await googleWebTranslate(session.regions,hooks.progress,hooks.signal,googleProxy,{spacingMs:0,onPartial:async regions=>{session.regions=regions;await saveSession(session);hooks.partial?.(regions);}});}
       catch(error){if(!conf.localFallback||hooks.signal?.aborted)throw error;hooks.progress?.({stage:'translating',message:'Google 來源失敗，使用已啟用的本機備援',backend:'local-http'});session.regions=await engine({op:'translate',regions:session.regions,settings:{...conf,backend:'local'},modelId:''},hooks.progress,hooks.signal);}
-    }else if(conf.backend==='chrome')session.regions=await engineChrome(session.regions,hooks);
+    }else if(conf.backend==='gemini-web')session.regions=await engineChrome(session.regions,hooks,{channel:'gemini-translate',settings:conf,pageHash:session.hash});
+    else if(conf.backend==='chrome')session.regions=await engineChrome(session.regions,hooks);
     else session.regions=await local();
     await saveSession(session);hooks.partial?.(session.regions);
-    }catch(error){hooks.onFailure?.(error);throw error;}
+    }catch(error){if(session.config.backend==='gemini-web'){await saveSession(session);hooks.partial?.(session.regions);}hooks.onFailure?.(error);throw error;}
   },hooks.signal);
 }
-async function engineChrome(regions:Region[],hooks:PageHooks){
+async function engineChrome(regions:Region[],hooks:PageHooks,extra:Record<string,unknown>={channel:'native-translate'}){
+  const inputFingerprint=JSON.stringify(regions.map(r=>[r.id,r.source]));
   const id=crypto.randomUUID(),listener=(message:any)=>{if(message.channel==='progress'&&message.id===id)hooks.progress?.(message.diagnostic);};
   await extensionCall(()=>chrome.runtime.onMessage.addListener(listener));
   const cancel=()=>{if(contextAlive())detached(()=>chrome.runtime.sendMessage({channel:'cancel',id}));};hooks.signal?.addEventListener('abort',cancel,{once:true});
-  try{const result=await extensionCall(()=>chrome.runtime.sendMessage({channel:'native-translate',id,regions}));hooks.signal?.throwIfAborted();if(!result?.ok)throw new Error(result?.error??'Chrome 本機翻譯未回應');return result.result as Region[];
+  try{const result=await extensionCall(()=>chrome.runtime.sendMessage({id,regions,...extra}));hooks.signal?.throwIfAborted();const output=result?.ok?result.result:result?.partial;if(output){if(JSON.stringify(regions.map(r=>[r.id,r.source]))!==inputFingerprint||!Array.isArray(output)||JSON.stringify(output.map((r:Region)=>[r.id,r.source]))!==inputFingerprint)throw new Error('原文或區域已改變，舊翻譯回覆已拒絕套用');if(!result?.ok)regions.splice(0,regions.length,...output);}if(!result?.ok)throw new Error(result?.error??'翻譯來源未回應');return result.result as Region[];
   }finally{hooks.signal?.removeEventListener('abort',cancel);if(contextAlive())detached(()=>chrome.runtime.onMessage.removeListener(listener));}
 }
 export async function processSession(session:PageSession,hooks:PageHooks={}){
   try{
   if(!session.regions.length)await detectSession(session,hooks);
   if(session.regions.some(r=>!r.ocrDone&&!r.source.trim()))await ocrSession(session,hooks);
+  await hooks.beforeTranslate?.();
   if(session.regions.some(r=>r.source.trim()&&!r.needsReview&&!r.translation.trim()))await translateSession(session,hooks);
   if(session.regions.some(r=>r.needsReview))hooks.progress?.({stage:'review',message:'部分原文需核對，其餘譯文已保留'});
   }catch(error){if(!(error instanceof DeferredTranslationError))hooks.onFailure?.(error);throw error;}

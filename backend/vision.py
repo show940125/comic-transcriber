@@ -7,9 +7,14 @@ from PIL import Image, ImageOps
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 class Vision:
-    def __init__(self):
+    def __init__(self, threads=4):
+        if threads not in (1, 2, 4):
+            raise ValueError('threads must be 1, 2 or 4')
+        self.threads = threads
         options = ort.SessionOptions()
-        options.intra_op_num_threads = 4
+        options.intra_op_num_threads = threads
+        options.inter_op_num_threads = 1
+        options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
         self.options = options
         self.detector = None
         self.encoder = None

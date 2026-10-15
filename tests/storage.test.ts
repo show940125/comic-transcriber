@@ -13,6 +13,10 @@ test('concurrent page saves retain both cache keys and both correction payloads'
  const values=storageFixture(),key=contentSignature(defaults),one=page('first',key),two=page('second',key);one.summary='第一張人工校正';two.summary='第二張人工校正';
  await Promise.all([cachePage(one),cachePage(two)]);assert.equal(values.pageKeys.length,2);assert.equal((await loadPage('first',key))?.summary,one.summary);assert.equal((await loadPage('second',key))?.summary,two.summary);
 });
+test('editing a legacy cached page keeps source metadata and corrections without retranslation',async()=>{
+ const values=storageFixture(),key=contentSignature(defaults),original=page('kept',key);Object.assign(original,{sourcePageUrl:'https://example.com/chapter',imageUrl:'https://example.com/page.png',pageIndex:3,savedAt:123});
+ await cachePage(original);await cachePage({...page('kept',key),summary:'人工修訂'});const result=await loadPage('kept',key);assert.equal(result?.summary,'人工修訂');assert.equal(result?.sourcePageUrl,original.sourcePageUrl);assert.equal(result?.savedAt,123);assert.equal(values.pageKeys.length,1);
+});
 test('legacy Google cache restores translated page across unused previous-page summaries',async()=>{
  const values=storageFixture(),current=contentSignature(defaults),legacy=JSON.parse(current);legacy[9]='作品';legacy[12]='先前對白';const key=`page:abc:${JSON.stringify(legacy)}`;
  values[key]=page('abc',JSON.stringify(legacy));values.pageKeys=[key];

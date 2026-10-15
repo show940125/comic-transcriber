@@ -152,6 +152,21 @@ Remove-Item Env:TEST_TRANSIENT_500
 
 測試執行實際 ONNX 偵測及 OCR，Google 翻譯回覆由 fixture 提供；檢查逐張呈現、停止／續翻、暫時 HTTP 500、原圖切換、全部縮圖與已存文字恢復。它驗證管線與介面，人工對白標註和翻譯可讀性另行評分。其他研究與比較程式位於 `scripts/`，真實漫畫測試需自行取得可使用的樣本。
 
+## 0.1.10 資源與實驗來源
+
+快取管理頁為 `cache.html`。頁面資料以 `chrome.storage.local.getBytesInUse()` 計量，模型快取記錄實際內容長度，舊項目可串流掃描。`bundle-inventory.json` 由建置產生，離線權重加入套件後會重新計算。模型下載快取與套件內權重可能同時存在，兩者分開列出。
+
+背景維持跨分頁圖片額度與資源使用記錄，offscreen 文件負責 60 秒閒置計時。狀態頁讀取已存快照，不建立模型；關閉與新任務交錯時等待關閉完成。工作中的快取刪除會被拒絕，頁面寫入、模型計量索引及刪除沿用單一寫入佇列。
+
+WASM 執行緒設定於建立任何 session 前套用。需要 COOP／COEP、Worker 隔離及 SharedArrayBuffer；多執行緒無法初始化時，重新建立單執行緒 Worker並顯示原因。執行中的設定變更延至下次釋放後生效。原生服務可指定執行緒：
+
+```powershell
+Set-Location -LiteralPath 'C:\path\to\comic-transcriber'
+python backend/server.py --threads 4
+```
+
+匿名 Gemini 由可見設定頁請求網站權限與啟動 30 批驗證，offscreen 文件持有單一序列。所有請求使用 `credentials: omit`，不接入登入會話或網站可執行程式。診斷資料及未知結果鎖保存本機；403／429、協定變更或不完整回覆會停止後續請求。研究入口與固定輸入／整章速度比較見 [0.1.10 研究報告](research-0.1.10.md)。
+
 ## 目錄
 
 | 目錄 | 用途 |

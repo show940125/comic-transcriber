@@ -2,23 +2,25 @@ import { defineContentScript } from 'wxt/utils/define-content-script';
 import { settings } from '../src/storage';
 import { imageBase64 } from '../src/binary';
 import { mount, unmount } from 'svelte';
-import Reader from '../src/Reader.svelte';
 import ChapterDock from '../src/ChapterDock.svelte';
+import {draggableDock} from '../src/dock-position';
 import { chapterImages, imageSource,expectedImageAssignment } from '../src/site-images';
 import type { Diagnostic } from '../src/types';
 import {loadSession,processSession,encodeSession} from '../src/page-pipeline';
-import {runPool,DeferredTranslationError} from '../src/scheduling';
+import {runPool,DeferredTranslationError,OrderedTurns} from '../src/scheduling';
 import {extensionCall,detached,onContextInvalidated,invalidateContext,contextAlive,watchExtensionContext} from '../src/extension-context';
 import {imageBytes} from '../src/binary';
 import {saveSettings} from '../src/storage';
 export default defineContentScript({
-  matches: ['http://*/*', 'https://*/*'], runAt: 'document_idle',
+  matches: [],registration:'runtime',runAt: 'document_idle',
   main(ctx) {
+    if(document.documentElement.hasAttribute('data-comic-active'))return;
+    document.documentElement.setAttribute('data-comic-active','');
     const original = new WeakMap<HTMLImageElement, string>(), processed = new WeakMap<HTMLImageElement, string>();
     const known = new WeakSet<HTMLImageElement>(), queue = new Set<HTMLImageElement>();
     let translating = false, dialog: HTMLDivElement | undefined, priorSummary = '', chapterKey = '';
     let closeDialog: (()=>void) | undefined;
-    let batchRunning=false, dock:HTMLDivElement|undefined;
+    let batchRunning=false,softPaused=false,toolsHidden=false,dock:HTMLDivElement|undefined;
     const lifetime=new AbortController(),activeImages=new Map<HTMLImageElement,Promise<void>>(),activeSources=new Map<HTMLImageElement,string>(),eventDisposers:Array<()=>void>=[];
     let activeRun:Promise<void>|undefined,live=true;let disposeDock:(()=>void)|undefined,runAbort:AbortController|undefined,runUrl='';
     function applyImage(image:HTMLImageElement,data:Uint8Array<ArrayBuffer>){
@@ -28,13 +30,14 @@ export default defineContentScript({
       image.title='墨譯繁中頁面；按墨譯可校正，雙擊圖片切換原圖';
     }
     async function runImages(images:HTMLImageElement[],report:(d:Diagnostic)=>void,complete:()=>void,stopped:()=>boolean,signal:AbortSignal){
+      if(batchRunning){softPaused=false;await extensionCall(()=>chrome.runtime.sendMessage({channel:'translation-resume'}));}
       if(activeRun)await activeRun.catch(()=>{});signal.throwIfAborted();lifetime.signal.throwIfAborted();
       const localAbort=new AbortController();runAbort=localAbort;runUrl=location.href;
       const conf=await settings(),chapterUrl=location.href,controller=AbortSignal.any([signal,lifetime.signal,localAbort.signal]);let failed=false;
       const key=JSON.stringify([location.origin,location.pathname,conf.title,conf.chapter,conf.glossary]);if(key!==chapterKey){chapterKey=key;priorSummary=conf.priorSummary;}
-      const limit=['google-web','chrome'].includes(conf.backend)?conf.pageConcurrency:1;
+      const limit=['google-web','chrome','gemini-web'].includes(conf.backend)?conf.pageConcurrency:1,turns=new OrderedTurns();
       const operation=runPool(images,limit,async(image,index)=>{
-        if(image.dataset.comicResult)return;
+        if(image.dataset.comicResult){turns.finish(index);return;}
         if(location.href!==chapterUrl||!image.isConnected)throw new Error('漫畫頁已變更，請重新啟動章節翻譯');
         const existing=activeImages.get(image);if(existing){await existing;return;}
         const jobId=crypto.randomUUID(),started=performance.now(),progress=(d:Diagnostic)=>report({...d,jobId,pageIndex:index});
@@ -49,8 +52,8 @@ export default defineContentScript({
             const source=original.get(image)??imageSource(image);let blob:Blob;
             if(/^https?:/.test(source)){const response=await extensionCall(()=>chrome.runtime.sendMessage({channel:'fetch-image',url:source}));if(!response?.ok)throw new Error(response?.error??'圖片讀取失敗');blob=new Blob([imageBytes(response.base64)],{type:response.mime});}
             else{const response=await bytes(image);blob=new Blob([imageBytes(response.base64)],{type:response.mime});}
-            controller.throwIfAborted();page=await loadSession(blob,{...conf,priorSummary},controller);
-            await processSession(page,{progress,signal:controller,canTranslate:()=>!failed,onFailure:()=>{failed=true;}});
+            controller.throwIfAborted();page=await loadSession(blob,{...conf,priorSummary},controller);page.metadata={sourcePageUrl:location.href,imageUrl:source,pageIndex:index};
+            try{await processSession(page,{progress,signal:controller,beforeTranslate:conf.backend==='gemini-web'?async()=>{await turns.wait(index,controller);if(page!.config.priorSummary!==priorSummary){page!.config.priorSummary=priorSummary;page!.regions.forEach(r=>r.translation='');}}:undefined,canTranslate:()=>!failed,onFailure:()=>{failed=true;}});if(conf.backend==='gemini-web')priorSummary=page.regions.map(r=>r.translation).filter(Boolean).join('\n').slice(-1200);}finally{turns.finish(index);}
             controller.throwIfAborted();if(location.href!==chapterUrl||!image.isConnected||(original.get(image)??imageSource(image))!==source)throw new Error('漫畫頁或圖片已變更，已存文字保留');
             progress({stage:'rendering',message:'嵌字及 PNG 編碼'});const renderStarted=performance.now(),data=await encodeSession(page);progress({stage:'rendering',message:'嵌字及 PNG 完成',ms:performance.now()-renderStarted});controller.throwIfAborted();if(!live)return;
             applyImage(image,data);image.dataset.comicReview=String(page.regions.filter(r=>r.needsReview||r.warnings.some(w=>/^原文清除需校正|^中文空間不足/.test(w))).length);
@@ -58,18 +61,18 @@ export default defineContentScript({
             progress({stage:'complete',message:'本張完成並已呈現',ms:performance.now()-started});complete();
           }catch(error){
             if(!(error instanceof DeferredTranslationError))failed=true;
-            image.dataset.comicError=error instanceof Error?error.message:String(error);
+            image.dataset.comicError=error instanceof Error?error.message:String(error);if(/403|429/.test(image.dataset.comicError))softPaused=true;
             if(error instanceof Error&&Object.isExtensible(error))Object.assign(error,{pageIndex:index,jobId});
             progress({stage:controller.aborted?'cancelled':'error',message:image.dataset.comicError});
             if(/out of memory|allocation failed|memory access out of bounds|gpu.*lost/i.test(image.dataset.comicError)){
               const current=await settings();await saveSettings({...current,pageConcurrency:1});image.dataset.comicError+='；已改為一張模式，續翻可恢復';
             }
             throw error;
-          }finally{page?.dispose();controller.removeEventListener('abort',cancelWaiting);release();}
+          }finally{turns.finish(index);page?.dispose();controller.removeEventListener('abort',cancelWaiting);release();}
         };
         activeSources.set(image,original.get(image)??imageSource(image));
         const task=work();activeImages.set(image,task);try{await task;}finally{activeImages.delete(image);activeSources.delete(image);}
-      },{stopped,signal:controller,failed:()=>failed});
+      },{stopped:()=>stopped()||softPaused,signal:controller,failed:()=>failed});
       activeRun=operation;try{await operation;}finally{if(activeRun===operation)activeRun=undefined;if(runAbort===localAbort)runAbort=undefined;}
     }
     async function bytes(image: HTMLImageElement) {
@@ -81,6 +84,7 @@ export default defineContentScript({
       }
     }
     async function open(image: HTMLImageElement, auto = false, report?:(diagnostic:Diagnostic)=>void) {
+      const {default:Reader}=await import('../src/Reader.svelte');
       if(!auto&&batchRunning)return;
       delete image.dataset.comicError;
       const source = original.get(image) ?? imageSource(image);
@@ -109,7 +113,7 @@ export default defineContentScript({
       return new Promise<void>(resolve => {
         let closed=false;
         const close=()=>{if(closed)return;closed=true;void unmount(component).catch(()=>{});holder.remove();if(dialog===holder){dialog=undefined;closeDialog=undefined;}resolve();};
-        const component=mount(Reader,{target:container,props:{siteInput:{...input,auto,priorSummary},onSiteProgress:report,onSiteBusy:busy=>{for(const control of pager.querySelectorAll('button,select'))(control as HTMLButtonElement).disabled=busy||(control as HTMLElement).dataset.outside==='true';},onSiteReview:count=>{image.dataset.comicReview=String(count);},onSiteSummary:summary=>{if(auto)priorSummary=summary;},onSiteApply:data=>{
+        const component=mount(Reader,{target:container,props:{siteInput:{...input,auto,priorSummary,sourcePageUrl:location.href,pageIndex:Math.max(0,chapterImages().indexOf(image))},onSiteProgress:report,onSiteBusy:busy=>{for(const control of pager.querySelectorAll('button,select'))(control as HTMLButtonElement).disabled=busy||(control as HTMLElement).dataset.outside==='true';},onSiteReview:count=>{image.dataset.comicReview=String(count);},onSiteSummary:summary=>{if(auto)priorSummary=summary;},onSiteApply:data=>{
             applyImage(image,data);
             if(auto)close();
           },onSiteError:error=>{image.dataset.comicError=error;if(auto)close();}}});
@@ -118,9 +122,9 @@ export default defineContentScript({
       });
     }
     async function drain() {
-      if (!live||translating || batchRunning) return; translating = true;
+      if (!live||softPaused||translating || batchRunning) return; translating = true;
       try {
-        while (queue.size) {
+        while (queue.size&&!softPaused) {
           const images = [...queue].sort((a, b) => Math.abs(a.getBoundingClientRect().top) - Math.abs(b.getBoundingClientRect().top));
           const image = images[0]; queue.delete(image);
           if (!image.isConnected || image.dataset.comicResult || !image.complete) continue;
@@ -141,14 +145,17 @@ export default defineContentScript({
         dock=document.createElement('div');dock.setAttribute('data-comic-dock','');dock.style.cssText='position:fixed;right:16px;bottom:16px;z-index:2147483646;';
         const shadow=dock.attachShadow({mode:'open'});shadow.addEventListener('click',event=>event.stopPropagation());
         const container=document.createElement('div');shadow.append(container);(document.body??document.documentElement).append(dock);
-        const component=mount(ChapterDock,{target:container,props:{getImages:()=>chapterImages(),onRunning:running=>batchRunning=running,runChapter:runImages,openChapter:()=>{const images=chapterImages();const next=images.find(i=>i.dataset.comicError)||images[0];if(next)detached(()=>open(next));},toggleOriginal:()=>{const images=chapterImages().filter(i=>i.dataset.comicResult);const showRaw=images.some(i=>i.src===i.dataset.comicResult);for(const image of images){const raw=original.get(image)||image.dataset.comicOriginal;if(raw&&image.dataset.comicResult){image.srcset='';image.src=showRaw?raw:image.dataset.comicResult;}}}}});disposeDock=()=>{void unmount(component).catch(()=>{});dock?.remove();};ctx.onInvalidated(disposeDock);
+        const component=mount(ChapterDock,{target:container,props:{getImages:()=>chapterImages(),onRunning:running=>batchRunning=running,runChapter:runImages,openChapter:()=>{const images=chapterImages();const next=images.find(i=>i.dataset.comicError)||images[0];if(next)detached(()=>open(next));},toggleOriginal:()=>{const images=chapterImages().filter(i=>i.dataset.comicResult);const showRaw=images.some(i=>i.src===i.dataset.comicResult);for(const image of images){const raw=original.get(image)||image.dataset.comicOriginal;if(raw&&image.dataset.comicResult){image.srcset='';image.src=showRaw?raw:image.dataset.comicResult;}}}}});
+        const stopDrag=draggableDock(dock,p=>detached(()=>chrome.storage.local.set({dockPosition:p})));eventDisposers.push(stopDrag);
+        detached(async()=>{const {dockPosition}=await chrome.storage.local.get<{dockPosition?:{x:number;y:number}}>('dockPosition');if(dockPosition&&dock){dock.style.left=Math.max(4,Math.min(dockPosition.x,innerWidth-dock.offsetWidth-4))+'px';dock.style.top=Math.max(4,Math.min(dockPosition.y,innerHeight-dock.offsetHeight-4))+'px';dock.style.right=dock.style.bottom='auto';}const state=await chrome.runtime.sendMessage({channel:'tab-tools-state'});toolsHidden=state?.hidden===true;if(toolsHidden&&dock)dock.style.display='none';});
+        disposeDock=()=>{void unmount(component).catch(()=>{});dock?.remove();};ctx.onInvalidated(disposeDock);
       }
       for (const image of pages) {
         if (known.has(image) || image.naturalWidth < 300 || image.naturalHeight < 300) continue;
         known.add(image); observer.observe(image);
         const trigger = document.createElement('button');trigger.setAttribute('data-comic-trigger',''); trigger.type = 'button'; trigger.textContent = '墨譯'; trigger.title = '翻譯／校正這張漫畫';
         trigger.style.cssText = 'position:fixed;display:none;z-index:2147483646;background:#284e3c;color:white;border:0;border-radius:14px;padding:7px 13px;font:13px sans-serif;cursor:pointer';
-        const show = () => { const rect = image.getBoundingClientRect(); trigger.style.left = Math.max(4, Math.min(innerWidth - 65, rect.right - 60)) + 'px'; trigger.style.top = Math.max(4, rect.top + 8) + 'px'; trigger.style.display = 'block'; };
+        const show = () => {if(toolsHidden)return;const rect = image.getBoundingClientRect(); trigger.style.left = Math.max(4, Math.min(innerWidth - 65, rect.right - 60)) + 'px'; trigger.style.top = Math.max(4, rect.top + 8) + 'px'; trigger.style.display = 'block'; };
         let timer:ReturnType<typeof setTimeout>|undefined;const leave=()=>{timer=setTimeout(()=>{if(!trigger.matches(':hover'))trigger.style.display='none';},180);};image.addEventListener('mouseenter',show);image.addEventListener('mouseleave',leave);eventDisposers.push(()=>{image.removeEventListener('mouseenter',show);image.removeEventListener('mouseleave',leave);if(timer)clearTimeout(timer);});
         trigger.onmouseleave = () => { trigger.style.display = 'none'; };
         trigger.onclick = event => { event.preventDefault(); event.stopImmediatePropagation(); trigger.textContent = '墨譯'; detached(()=>open(image),e=>{image.dataset.comicError=String(e);trigger.textContent='讀取失敗';trigger.title=String(e);}); };
@@ -170,10 +177,17 @@ export default defineContentScript({
     mutations.observe(document.documentElement, { subtree: true, childList: true, attributes: true, attributeFilter: ['src', 'srcset'] });
     document.addEventListener('load', scan, true); scan();
     const navigation=()=>runAbort?.abort(new DOMException('漫畫頁已變更','AbortError'));addEventListener('popstate',navigation);eventDisposers.push(()=>removeEventListener('popstate',navigation));
-    const receive=(message:any)=>{if(live&&message.channel==='open-image'){const image=[...document.images].find(i=>i.currentSrc===message.url||original.get(i)===message.url);if(image)detached(()=>open(image));}};
+    const pausePage=()=>{softPaused=true;queue.clear();dispatchEvent(new CustomEvent('comic-pause'));detached(()=>chrome.runtime.sendMessage({channel:'runtime-release'}));};
+    addEventListener('comic-pause-page',pausePage);eventDisposers.push(()=>removeEventListener('comic-pause-page',pausePage));
+    const receive=(message:any,_sender:any,reply:(value:any)=>void)=>{if(!live)return;
+      if(message.channel==='tools-visibility'){toolsHidden=message.hidden===true;if(dock)dock.style.display=toolsHidden?'none':'';if(dialog)dialog.style.display=toolsHidden?'none':'';for(const trigger of document.querySelectorAll<HTMLElement>('[data-comic-trigger]'))if(toolsHidden)trigger.style.display='none';reply({ok:true});}
+      if(message.channel==='pause-tools'){pausePage();reply({ok:true});}
+      if(message.channel==='open-image'){const image=[...document.images].find(i=>i.currentSrc===message.url||original.get(i)===message.url);if(image)detached(()=>open(image));}
+    };
     detached(()=>chrome.runtime.onMessage.addListener(receive));
     const cleanup=()=>{
       if(!live)return;live=false;lifetime.abort();observer.disconnect();mutations.disconnect();queue.clear();document.removeEventListener('load',scan,true);
+      document.documentElement.removeAttribute('data-comic-active');
       for(const dispose of eventDisposers)dispose();closeDialog?.();disposeDock?.();dock?.remove();
       for(const trigger of document.querySelectorAll('[data-comic-trigger]'))trigger.remove();
       if(contextAlive())detached(()=>chrome.runtime.onMessage.removeListener(receive));

@@ -1,12 +1,12 @@
 {
   "name": "comic-transcriber",
-  "version": "0.1.9",
+  "version": "0.1.10",
   "private": true,
   "type": "module",
   "license": "Apache-2.0",
   "scripts": {
     "dev": "wxt",
-    "build": "wxt build",
+    "build": "wxt build && node scripts/bundle-inventory.mjs",
     "zip": "wxt zip",
     "typecheck": "svelte-check --tsconfig tsconfig.json",
     "test": "tsx --test tests/*.test.ts tests/*.test.mjs",

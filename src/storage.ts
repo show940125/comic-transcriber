@@ -8,16 +8,19 @@ export async function settings(): Promise<Settings> {
 }
 export async function saveSettings(value: Settings) { await extensionCall(()=>chrome.storage.local.set({ settings: value })); }
 let writeTail:Promise<unknown>=Promise.resolve();
+export function storageWrite<T>(work:()=>Promise<T>):Promise<T>{const next=writeTail.catch(()=>{}).then(work);writeTail=next;return next;}
 export async function cachePage(page: PageData) {
   if(chrome.runtime?.id){const response=await extensionCall(()=>chrome.runtime.sendMessage({channel:'cache-page',page}));if(!response?.ok)throw new Error(response?.error??'頁面快取儲存失敗');return;}
   return cachePageDirect(page);
 }
 // The service worker owns one cache-index writer across all tabs/documents.
 export function cachePageDirect(page:PageData):Promise<void>{
-  const operation=writeTail.catch(()=>{}).then(()=>extensionCall(()=>writePage(page)));writeTail=operation;return operation;
+  return storageWrite(()=>extensionCall(()=>writePage(page)));
 }
 async function writePage(page:PageData) {
   const key = `page:${page.hash}:${page.modelKey}`;
+  const old=(await chrome.storage.local.get(key))[key] as PageData|undefined;
+  for(const field of ['sourcePageUrl','imageUrl','pageIndex','savedAt','lastAccessAt'] as const)if(page[field]===undefined&&old?.[field]!==undefined)Object.assign(page,{[field]:old[field]});
   await chrome.storage.local.set({ [key]: page });
   const { pageKeys = [] } = await chrome.storage.local.get<{ pageKeys: string[] }>('pageKeys');
   const prefix=`page:${page.hash}:`,aliases=pageKeys.filter(k=>k!==key&&k.startsWith(prefix)&&compatiblePageKey(k.slice(prefix.length),page.modelKey));
