@@ -4,6 +4,7 @@ import {translationInstructions} from './core';
 import type {Region,Settings} from './types';
 import {parseTranslations,hashBlob} from './core';
 export const geminiOrigin='https://gemini.google.com/*';
+export const geminiTimeoutMs=180_000;
 export class GeminiFailure extends Error{constructor(message:string,public state:'failed'|'unknown'='failed',public httpStatus?:number){super(message);this.name='GeminiFailure';}}
 export function bootstrapVersion(html:string){return html.match(/(?:boq_assistant-bard-web-server|boq_gemini-web-uiserver)_\d+\.\d+_p\d+/)?.[0];}
 export function parseGeminiFrames(raw:string):string{
@@ -32,13 +33,19 @@ export async function anonymousGemini(prompt:string,signal?:AbortSignal,fetcher:
   if(!build){const error=new GeminiFailure('匿名頁未提供可辨識的協定版本；本來源尚不可用');Object.assign(error,{diagnostic:{phase:'bootstrap',httpStatus:init.status,url:init.url,characters:html.length,title:html.match(/<title[^>]*>([^<]{0,120})<\/title>/)?.[1],labels:html.match(/boq[_-][a-z-]+_\d[^"<>\s\\]*/g)?.slice(0,3)}});throw error;}
   const url=new URL('https://gemini.google.com/_/BardChatUi/data/assistant.lamda.BardFrontendService/StreamGenerate');url.search=new URLSearchParams({bl:build,hl:'ja',_reqid:String(Math.floor(Math.random()*900000)+100000),rt:'c'}).toString();
   const body=geminiBody(prompt),token=html.match(/"SNlM0e"\s*:\s*"([^"\\]+)"/)?.[1];if(token)body.set('at',token);
-  phase?.(`已取得 ${build}，提交匿名文字請求`);lastStart=performance.now();let response:Response;
-  try{response=await fetcher(url,{method:'POST',credentials:'omit',redirect:'error',headers:{'Content-Type':'application/x-www-form-urlencoded','X-Same-Domain':'1'},body,signal:signal?AbortSignal.any([signal,AbortSignal.timeout(90000)]):AbortSignal.timeout(90000)});}
-  catch(error){throw new GeminiFailure(`提交後連線中斷或取消，結果未知；不自動重送：${String(error)}`,'unknown');}
+  phase?.(`已取得 ${build}，提交匿名文字請求`);lastStart=performance.now();const started=performance.now(),timeout=AbortSignal.timeout(geminiTimeoutMs),requestSignal=signal?AbortSignal.any([signal,timeout]):timeout;let response:Response;
+  const interrupted=(error:unknown,phase:string,received=0)=>{
+    const elapsedMs=Math.round(performance.now()-started),cause=signal?.aborted?'cancel':timeout.aborted?'timeout':'network';
+    const reason=cause==='cancel'?'使用者取消':cause==='timeout'?'超過 180 秒等待上限':'網路或伺服器串流中斷';
+    const failure=new GeminiFailure(`${reason}（${phase}，已等待 ${(elapsedMs/1000).toFixed(1)} 秒）；結果未知，不自動重送；OCR 與既有譯文已保留`,'unknown');
+    Object.assign(failure,{diagnostic:{cause,phase,elapsedMs,timeoutMs:geminiTimeoutMs,receivedCharacters:received,error:String(error)}});return failure;
+  };
+  try{requestSignal.throwIfAborted();response=await fetcher(url,{method:'POST',credentials:'omit',redirect:'error',headers:{'Content-Type':'application/x-www-form-urlencoded','X-Same-Domain':'1'},body,signal:requestSignal});}
+  catch(error){throw interrupted(error,'等待回應');}
   if(!response.ok)throw new GeminiFailure(`Gemini HTTP ${response.status}；已停止本批請求`,'failed',response.status);
-  phase?.('已提交，等待完整串流回覆（最多 90 秒）');
+  phase?.('已提交，等待完整串流回覆（最多 180 秒）');
   let raw='';try{const reader=response.body!.getReader(),decoder=new TextDecoder();try{while(true){signal?.throwIfAborted();const part=await reader.read();if(part.done)break;raw+=decoder.decode(part.value,{stream:true});if(raw.length>2_000_000)throw new GeminiFailure('Gemini 回覆超過大小限制');}raw+=decoder.decode();}finally{await reader.cancel().catch(()=>{});reader.releaseLock();}}
-  catch(error){if(error instanceof GeminiFailure)throw error;throw new GeminiFailure('串流中斷或取消，結果未知；完成的 OCR 已保留','unknown');}
+  catch(error){if(error instanceof GeminiFailure)throw error;throw interrupted(error,'讀取串流',raw.length);}
   return {text:parseGeminiFrames(raw),raw,build};
 }
 export function translationBatches(regions:Region[]){const groups:Region[][]=[];let group:Region[]=[],length=0;for(const r of regions.filter(r=>r.source.trim()&&!r.needsReview&&!r.translation.trim()).sort((a,b)=>a.order-b.order)){const n=Array.from(r.source).length;if(group.length&&(group.length>=24||length+n>6000)){groups.push(group);group=[];length=0;}group.push(r);length+=n;}if(group.length)groups.push(group);return groups;}

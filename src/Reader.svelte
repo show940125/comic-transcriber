@@ -11,7 +11,7 @@
   import {detectSession,ocrSession,translateSession,processSession,saveSession,encodeSession,sessionData,type PageSession} from './page-pipeline';
   import {extensionCall,detached} from './extension-context';
   let { siteInput, onSiteApply, onSiteError, onSiteSummary, onSiteProgress, onSiteBusy, onSiteReview }: {
-    siteInput?: {base64?:string; mime?:string; imageUrl?:string; auto?:boolean; priorSummary?:string;sourcePageUrl?:string;pageIndex?:number};
+    siteInput?: {base64?:string; mime?:string; imageUrl?:string; auto?:boolean; priorSummary?:string;sourcePageUrl?:string;pageIndex?:number;pageData?:PageData};
     onSiteApply?: (bytes:Uint8Array<ArrayBuffer>,page?:PageData)=>void;
     onSiteError?: (error:string)=>void;
     onSiteSummary?: (summary:string)=>void;
@@ -78,7 +78,11 @@
     imageUrl = URL.createObjectURL(input); const next = new Image(); next.src = imageUrl; await next.decode();
     if (next.naturalWidth * next.naturalHeight > 30_000_000) throw new Error('圖片超過 3000 萬像素，請先裁切');
     image = next; blob = input; filename = name; hash = await hashBlob(input); signature = contentSignature(config);
-    const cached = await loadPage(hash, signature); regions = (cached?.regions??[]).map(r=>({...r,bubbleBox:r.bubbleBox??(r.kind==='bubble'?r.ocrBox:undefined),ocrDone:r.ocrDone??(!!r.source.trim()||r.warnings.some(w=>/疑似無文字|缺少日文字元/.test(w)))})); selected = ''; original = false;
+    const supplied=siteInput?.pageData;
+    let cached=await loadPage(hash,signature);
+    if(supplied?.hash===hash&&supplied.width===image.naturalWidth&&supplied.height===image.naturalHeight){cached=await loadPage(hash,supplied.modelKey)??supplied;}
+    if(cached){let direct=false;try{direct=JSON.parse(cached.modelKey)[1]==='gemini-web';}catch{}if(direct){config.backend='gemini-web';config.priorSummary=(await readSettings()).priorSummary;signature=contentSignature(config);}}
+    regions = (cached?.regions??[]).map(r=>({...r,bubbleBox:r.bubbleBox??(r.kind==='bubble'?r.ocrBox:undefined),ocrDone:r.ocrDone??(!!r.source.trim()||r.warnings.some(w=>/疑似無文字|缺少日文字元/.test(w)))})); selected = ''; original = false;
     metadata={sourcePageUrl:siteInput?.sourcePageUrl??cached?.sourcePageUrl,imageUrl:siteInput?.imageUrl??cached?.imageUrl,pageIndex:siteInput?.pageIndex??cached?.pageIndex,refinement:cached?.refinement};
     message = cached ? '已載入圖片與先前校正' : '圖片已載入，按「偵測文字框」或手動框選'; stage = cached ? 'complete' : 'idle'; paint();
   }

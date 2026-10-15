@@ -8,7 +8,7 @@ import {extensionCall,detached,contextAlive} from './extension-context';
 import {renderPage,loadFont} from './render';
 import {SerialLane,DeferredTranslationError} from './scheduling';
 export interface PageSession {blob:Blob;image:HTMLImageElement;regions:Region[];hash:string;modelKey:string;config:Settings;metadata?:Pick<PageData,'sourcePageUrl'|'imageUrl'|'pageIndex'|'refinement'>}
-export interface PageHooks {progress?:(d:Diagnostic)=>void;partial?:(regions:Region[])=>void;beforeTranslate?:()=>Promise<void>;canTranslate?:()=>boolean;onFailure?:(error:unknown)=>void;signal?:AbortSignal}
+export interface PageHooks {progress?:(d:Diagnostic)=>void;partial?:(regions:Region[])=>void;beforeTranslate?:()=>Promise<void>;canTranslate?:()=>boolean;onFailure?:(error:unknown)=>void;signal?:AbortSignal;ocrOnly?:boolean}
 const translationLane=new SerialLane();
 export async function loadSession(blob:Blob,config:Settings,signal?:AbortSignal):Promise<PageSession&{dispose:()=>void}>{
   if(blob.size>20*1024*1024||!blob.type.startsWith('image/'))throw new Error('請使用 20 MB 以內的圖片');
@@ -72,6 +72,7 @@ export async function processSession(session:PageSession,hooks:PageHooks={}){
   try{
   if(!session.regions.length)await detectSession(session,hooks);
   if(session.regions.some(r=>!r.ocrDone&&!r.source.trim()))await ocrSession(session,hooks);
+  if(hooks.ocrOnly)return;
   await hooks.beforeTranslate?.();
   if(session.regions.some(r=>r.source.trim()&&!r.needsReview&&!r.translation.trim()))await translateSession(session,hooks);
   if(session.regions.some(r=>r.needsReview))hooks.progress?.({stage:'review',message:'部分原文需核對，其餘譯文已保留'});

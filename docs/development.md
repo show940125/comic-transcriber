@@ -194,3 +194,16 @@ Issue 請附擴充套件與瀏覽器版本、翻譯模式、操作步驟及錯�
 ## 0.1.13 網站與 CDN 存取
 
 Manifest 的 required host permissions 為 `http://*/*` 與 `https://*/*`。背景讀圖依實際權限檢查；Chrome 收回網站存取時，提示從插件圖示或可見設定頁恢復所有網站權限。權限請求由使用者點擊直接觸發。頁內工具保持按需注入；`autoSites` 僅接受具體網站 pattern，過濾 wildcard 與編碼主機名稱，避免全網站存取權變成全網站自動翻譯。驗證範圍見 [0.1.13 紀錄](research-0.1.13.md)。
+
+
+## 0.1.14 整章直譯與長回覆
+
+`chapterMode` 為 `standard`（預設）或 `gemini-direct`。模式只影響手動整章作業；後者讓 `processSession` 使用 `ocrOnly`，由共用 OCR Worker 收齊原文，呼叫背景 `gemini-chapter` → offscreen `chapter`，共用整章輸入、提示、精確 ID 驗證與回填流程。圖片、幾何與字型均留在本機。
+
+直譯的頁面快取使用 Gemini 身分，與 Google 初譯分開；相容 Google OCR 先讀取最多 30 份有界快照，逐張依圖片雜湊比對後復用。整章請求採 `p1r1` 類型的暫時 ID，對應固定頁面索引與原始區域 ID，並以包含圖片雜湊、原文和目前譯文的章節指紋防止舊回覆套用。直譯不建立虛構 Google baseline。
+
+`geminiTimeoutMs=180000` 從 POST 開始限制標頭與串流等待；初始化頁另有 20 秒上限。已提交後的中斷均保存 unknown，診斷包含 cause、phase、elapsedMs、timeoutMs 與已讀字元數。unknown 不自動重送，也不抹除既有協定通過證據。完整回覆的格式修正最多一次，每次都有獨立等待上限。
+
+文字回覆全部驗證後，先保存全部頁面，再開始 PNG 重排。已保存的結果指紋與目前呈現指紋分開；重排中斷時，下次沿用已驗證結果重新呈現。診斷紀錄接受最多 400,000 字元（包含 JSON 再次跳脫），足以容納 120 KB 輸入與各 24,000 字元的 response/raw 摘錄。
+
+瀏覽器回歸：`node scripts/chapter-direct-regression.mjs`。使用原創合成圖片、預存 OCR 及匿名協定回覆 fixture，不發送真正翻譯請求；報告置於本機 `artifacts/regression-0.1.14/`。

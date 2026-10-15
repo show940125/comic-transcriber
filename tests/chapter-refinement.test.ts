@@ -40,3 +40,40 @@ test('correction JSON retains the Google baseline and rejects malformed baseline
  const p=page(1);p.regions[0].initialTranslation='Google 初譯';assert.equal(importCorrection(p,p.hash,p.width,p.height)[0].initialTranslation,'Google 初譯');
  (p.regions[0] as any).initialTranslation={html:'bad'};assert.throws(()=>importCorrection(p,p.hash,p.width,p.height));
 });
+
+
+test('29-page direct translation sends all Japanese once, omits Google drafts and preserves exact IDs',async()=>{
+ const pages=Array.from({length:29},(_,n)=>page(n));for(const p of pages)p.regions[0].translation='';
+ const before=chapterSnapshot(pages),jobs:any[]=[];let calls=0;
+ const result=await refineChapter(pages,defaults,undefined,async j=>{jobs.push(j);},async prompt=>{
+   calls++;const input=JSON.parse(prompt.slice(prompt.indexOf('\n')+1));assert.equal(input.pages.length,29);
+   assert(input.pages.every((p:any)=>p.regions.every((r:any)=>!('draft' in r)&&!('current' in r)&&r.id.length<12)));
+   return {text:JSON.stringify(input.pages.map((p:any)=>({id:p.regions[0].id,text:'直譯第 '+p.page+' 頁'})).reverse()),raw:'fixture',build:'fixture'};
+ },true);
+ assert.equal(calls,1);assert.equal(result.regions,29);assert.equal(chapterSnapshot(pages),before);
+ const output=checkedRefinement(pages,before,result);assert.equal(output[28].regions[0].translation,'直譯第 29 頁');
+ assert(output.every(p=>p.regions[0].initialTranslation===undefined&&p.refinement?.mode==='direct'));
+ assert.equal(jobs[0].kind,'chapter-translation');assert.equal(jobs[0].pages,29);assert(jobs[0].inputBytes>0);
+ assert.notEqual(await refinementContext(defaults,true),await refinementContext(defaults));
+});
+
+test('direct translation rejects missing, duplicate or extra IDs and preserves OCR on failure',async()=>{
+ const pages=[page(1),page(2)];pages.forEach(p=>p.regions[0].translation='');const snapshot=chapterSnapshot(pages);
+ for(const reply of [[{id:'p1r1',text:'缺頁'}],[{id:'p1r1',text:'重複'},{id:'p1r1',text:'重複'}],[{id:'p1r1',text:'好'},{id:'p2r1',text:'好'},{id:'extra',text:'多餘'}]]){
+   let calls=0;await assert.rejects(refineChapter(pages,defaults,undefined,undefined,async()=>{calls++;return {text:JSON.stringify(reply),raw:'fixture',build:'fixture'};},true));assert.equal(calls,2);assert.equal(chapterSnapshot(pages),snapshot);
+ }
+});
+
+test('unknown chapter stream failure records timing diagnostics and never performs format repair',async()=>{
+ const {GeminiFailure}=await import('../src/gemini-web');const jobs:any[]=[];let calls=0;
+ const error=Object.assign(new GeminiFailure('timeout','unknown'),{diagnostic:{cause:'timeout',elapsedMs:180001}});
+ await assert.rejects(refineChapter([page(1)],defaults,undefined,async j=>{jobs.push(j);},async()=>{calls++;throw error;}));
+ assert.equal(calls,1);assert.equal(jobs.at(-1).status,'unknown');assert.equal(jobs.at(-1).diagnostic.cause,'timeout');
+});
+
+
+test('switching to Google second-pass mode never relabels or overwrites direct translations as Google drafts',()=>{
+ const p=page(1);p.refinement={fingerprint:'f',at:1,provider:'gemini-web',promptVersion:3,mode:'direct'};
+ assert.throws(()=>refinementInput([p],defaults),/Gemini 直譯/);assert.equal(p.regions[0].initialTranslation,undefined);
+ assert.equal(refinementInput([p],defaults,true).expected.length,1);
+});

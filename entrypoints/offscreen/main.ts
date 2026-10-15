@@ -60,16 +60,17 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
         }catch(error){geminiStopped=true;return {ok:true,result:{status:'blocked',completed,required:30,error:String(error),at:Date.now()}};}
       }
       if(geminiStopped)throw new Error('匿名 Gemini 前一批失敗，待重新驗證後才能恢復');
-      if(message.op==='refine'){
+      if(message.op==='refine'||message.op==='chapter'){
+        const direct=message.op==='chapter';
         if(!Array.isArray(message.pages)||message.pages.length>60)throw new Error('整章校正頁面格式錯誤');
         const started=performance.now(),progress=(text:string)=>detached(()=>chrome.runtime.sendMessage({channel:'progress',id:message.id,diagnostic:{stage:'translating',message:text,backend:'gemini-web/refinement',model:'網站自動選擇'}}));
-        progress(`整章 ${message.pages.length} 張：送出全部原文與初譯進行二段校正`);
-        try{const result=await refineChapter(message.pages,message.settings,controller.signal,record,(prompt,signal)=>anonymousGemini(prompt,signal,fetch,progress));progress(`完整回覆已核對 ${result.regions} 個區域，準備逐張重排`);return {ok:true,result:{...result,ms:performance.now()-started}};}catch(error){if(!controller.signal.aborted)geminiStopped=true;throw error;}
+        progress(`整章 ${message.pages.length} 張：${direct?'送出全部日文直接翻譯':'送出全部原文與初譯進行二段校正'}`);
+        const result=await refineChapter(message.pages,message.settings,controller.signal,record,(prompt,signal)=>anonymousGemini(prompt,signal,fetch,progress),direct);progress(`完整回覆已核對 ${result.regions} 個區域，準備逐張重排`);return {ok:true,result:{...result,ms:performance.now()-started}};
       }
       if(!Array.isArray(message.regions)||message.regions.length>300)throw new Error('Gemini 區域格式錯誤');
       const started=performance.now(),progress=(text:string)=>detached(()=>chrome.runtime.sendMessage({channel:'progress',id:message.id,diagnostic:{stage:'translating',message:text,backend:'gemini-web/anonymous',model:'網站自動選擇'}}));progress('匿名 Gemini：依閱讀順序翻譯');
       try{const result=await geminiTranslate(message.regions,message.settings,message.pageHash,controller.signal,record,(prompt,signal)=>anonymousGemini(prompt,signal,fetch,progress));detached(()=>chrome.runtime.sendMessage({channel:'progress',id:message.id,diagnostic:{stage:'complete',message:'匿名 Gemini 翻譯與區域 ID 核對完成',backend:'gemini-web/anonymous',model:'網站自動選擇',ms:performance.now()-started}}));return {ok:true,result};}catch(error){if(!controller.signal.aborted)geminiStopped=true;throw error;}
-    },controller.signal).finally(()=>geminiAborts.delete(message.id)).then(reply,error=>{if(!controller.signal.aborted)geminiStopped=true;reply({ok:false,error:String(error),state:error?.state,httpStatus:error?.httpStatus,partial:error?.partial});});return true;
+    },controller.signal).finally(()=>geminiAborts.delete(message.id)).then(reply,error=>{if(!controller.signal.aborted&&error?.state==='failed')geminiStopped=true;reply({ok:false,error:String(error),state:error?.state,httpStatus:error?.httpStatus,partial:error?.partial});});return true;
   }
   if(message.channel==='offscreen-native'){
     if(message.op==='status'){chromeTranslatorAvailability().then(result=>reply({ok:true,result}),error=>reply({ok:false,error:String(error)}));return true;}

@@ -87,3 +87,20 @@ test('automatic injection retains only explicitly selected concrete websites aft
  try{assert.equal((await f.send({channel:'auto-scripts'})).ok,true);assert.deepEqual(f.registered[0].matches,['https://manga.example/*']);}
  finally{delete globalThis.chrome;}
 });
+
+
+test('large valid chapter diagnostics can record success and release the unknown lock',async()=>{
+ const f=await fixture(),url='chrome-extension://fixture/offscreen.html',job={requestId:'large',inputHash:'b'.repeat(64),status:'submitted',prompt:'\\\"'.repeat(59000)};
+ try{assert.equal((await f.send({channel:'gemini-record',job},url)).ok,true);
+ const complete={...job,status:'complete',response:'y'.repeat(24000),raw:'z'.repeat(24000)};
+ assert.equal((await f.send({channel:'gemini-record',job:complete},url)).ok,true);assert.equal(f.data.geminiJobs[0].status,'complete');assert.equal(Object.keys(f.data.geminiUnknown).length,0);
+ assert.equal((await f.send({channel:'gemini-record',job:{...complete,raw:'x'.repeat(410000)}},url)).ok,false);
+ }finally{delete globalThis.chrome;}
+});
+
+test('whole-chapter direct mode routes through the existing gate and unknown errors preserve protocol proof',async()=>{
+ const f=await fixture();f.data.geminiValidation={status:'passed',completed:30};const original=chrome.runtime.sendMessage;let op;
+ chrome.runtime.sendMessage=async m=>{if(m.channel==='offscreen-gemini'){op=m.op;return {ok:false,state:'unknown',error:'timeout'};}return original(m);};
+ try{const result=await f.send({channel:'gemini-chapter',pages:[],settings:{}});assert.equal(op,'chapter');assert.equal(result.state,'unknown');assert.equal(f.data.geminiValidation.status,'passed');}
+ finally{delete globalThis.chrome;}
+});

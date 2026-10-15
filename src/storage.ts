@@ -1,11 +1,12 @@
 import { defaults, type Settings, type PageData } from './types';
-import { compatiblePageKey,translationInstructions,translationInstructionsLimit } from './core';
+import { compatiblePageKey,contentSignature,translationInstructions,translationInstructionsLimit } from './core';
 import {extensionCall} from './extension-context';
 import {specificSites} from './site-access';
 export async function settings(): Promise<Settings> {
   const result = await extensionCall(()=>chrome.storage.local.get('settings'));
   const value={ ...defaults, ...(result.settings as Partial<Settings> | undefined) };
   value.pageConcurrency=value.pageConcurrency===1?1:2;
+  value.chapterMode=value.chapterMode==='gemini-direct'?'gemini-direct':'standard';
   value.translationInstructions=translationInstructions(value);
   value.autoSites=specificSites(value.autoSites);
   // Gemini now performs the optional whole-chapter second pass.
@@ -35,6 +36,13 @@ async function writePage(page:PageData) {
 }
 export async function loadPage(hash: string, modelKey: string): Promise<PageData | undefined> {
   return extensionCall(()=>readPage(hash,modelKey));
+}
+// Capture the bounded page cache before direct-mode writes rotate its 30 keys.
+export async function ocrReusePages(config:Settings):Promise<Map<string,PageData>>{
+  const modelKey=contentSignature({...config,backend:'google-web'});
+  const {pageKeys=[]}=await extensionCall(()=>chrome.storage.local.get<{pageKeys:string[]}>('pageKeys'));
+  const keys=pageKeys.slice(0,30),stored=keys.length?await extensionCall(()=>chrome.storage.local.get(keys)):{};
+  return new Map(keys.map(k=>stored[k] as PageData).filter(p=>p?.schema===1&&compatiblePageKey(p.modelKey,modelKey)).map(p=>[p.hash,p]));
 }
 async function readPage(hash:string,modelKey:string):Promise<PageData|undefined>{
   const key = `page:${hash}:${modelKey}`;

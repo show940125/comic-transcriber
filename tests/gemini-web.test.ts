@@ -33,3 +33,25 @@ test('a failed second batch preserves first translations and an unknown result n
  await assert.rejects(geminiTranslate(Array.from({length:25},(_,n)=>region(String(n))),defaults,'hash',undefined,async job=>{jobs.push(job);},async()=>{calls++;if(calls===2)throw new GeminiFailure('unknown','unknown');return {text:JSON.stringify(Array.from({length:24},(_,n)=>({id:String(n),text:'你好'}))),raw:'fixture',build:'fixture'};}),(e:any)=>e.partial.filter((r:Region)=>r.translation).length===24);
  assert.equal(calls,2);assert.equal(jobs.at(-1).status,'unknown');
 });
+
+
+test('180-second deadline covers response body and reports timeout separately from cancellation',async()=>{
+ const {geminiTimeoutMs}=await import('../src/gemini-web');assert.equal(geminiTimeoutMs,180000);
+ const original=AbortSignal.timeout,timeout=new AbortController(),limits:number[]=[];
+ AbortSignal.timeout=(ms:number)=>{limits.push(ms);return ms===180000?timeout.signal:original(ms);};
+ let posts=0;
+ try{
+  const fetcher:typeof fetch=async(_url,init)=>{if(init?.method!=='POST')return new Response('boq_gemini-web-uiserver_20261013.29_p0');posts++;
+   return new Response(new ReadableStream({start(controller){init.signal!.addEventListener('abort',()=>controller.error(init.signal!.reason),{once:true});queueMicrotask(()=>timeout.abort(new DOMException('timed out','TimeoutError')));}}));
+  };
+  await assert.rejects(anonymousGemini('whole chapter',undefined,fetcher),(e:any)=>e.state==='unknown'&&e.diagnostic.cause==='timeout'&&e.diagnostic.timeoutMs===180000&&/180 秒/.test(e.message));
+  assert.equal(posts,1);assert.deepEqual(limits,[20000,180000]);
+ }finally{AbortSignal.timeout=original;}
+});
+
+test('a user cancellation after headers is reported as cancel and retains unknown submission state',async()=>{
+ const abort=new AbortController();let posts=0;
+ const fetcher:typeof fetch=async(_url,init)=>{if(init?.method!=='POST')return new Response('boq_gemini-web-uiserver_20261013.29_p0');posts++;
+ return new Response(new ReadableStream({start(c){init.signal!.addEventListener('abort',()=>c.error(init.signal!.reason),{once:true});queueMicrotask(()=>abort.abort());}}));};
+ await assert.rejects(anonymousGemini('whole chapter',abort.signal,fetcher),(e:any)=>e.state==='unknown'&&e.diagnostic.cause==='cancel'&&/使用者取消/.test(e.message));assert.equal(posts,1);
+});

@@ -13,6 +13,9 @@ export function chapterImages(doc:Document=document):HTMLImageElement[] {
     if(image.closest(excluded))return false;
     const source=imageSource(image),name=source.split('/').at(-1)??'';
     if(!source||/^(?:logo|avatar|upvote|funny|love|surprised|angry|sad)(?:[-_.]|$)/i.test(name))return false;
+    // Replacing src resets natural dimensions until the PNG decodes. Keep an
+    // already admitted translated page in the chapter during that interval.
+    if(image.dataset.comicOriginal&&image.dataset.comicResult)return true;
     return image.naturalWidth>=300&&image.naturalHeight>=300 || reader&&!!(image.dataset.src||image.dataset.original||(!image.complete&&image.src));
   }
   const candidates=roots.map(root=>[...root.querySelectorAll('img')].filter(i=>eligible(i,true)));

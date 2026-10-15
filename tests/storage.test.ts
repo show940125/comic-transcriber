@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {cachePage,loadPage,settings} from '../src/storage';
+import {cachePage,loadPage,settings,ocrReusePages} from '../src/storage';
 import {contentSignature} from '../src/core';
 import {defaults,type PageData} from '../src/types';
 function storageFixture(){
@@ -31,4 +31,19 @@ test('local LLM context changes cannot reuse legacy page and cache migration doe
  values[key]=page('abc',JSON.stringify(legacy));values.pageKeys=[key];assert.equal(await loadPage('abc',local),undefined);
  const google=contentSignature(defaults),prior=JSON.parse(google);prior[12]='上一頁';const googleKey=`page:xyz:${JSON.stringify(prior)}`;values[googleKey]=page('xyz',JSON.stringify(prior));values.pageKeys=[googleKey,key];
  await cachePage(page('xyz',google));assert.equal(values.pageKeys.length,2);assert(values[key]);assert(!values[googleKey]);
+});
+
+
+test('direct-mode OCR reuse captures compatible pages before the bounded cache rotates',async()=>{
+ const values=storageFixture(),google=contentSignature(defaults),direct=contentSignature({...defaults,backend:'gemini-web'});
+ for(let n=0;n<29;n++)await cachePage(page('hash-'+n,google));
+ const snapshot=await ocrReusePages(defaults);assert.equal(snapshot.size,29);
+ for(let n=0;n<29;n++)await cachePage(page('hash-'+n,direct));
+ assert.equal(values.pageKeys.length,30);assert(snapshot.has('hash-28'));assert.equal(snapshot.get('hash-28')?.modelKey,google);
+ assert.equal((await ocrReusePages({...defaults,ocrProvider:'auto'})).size,0);
+});
+
+test('old settings retain standard chapter mode and explicit direct selection persists independently',async()=>{
+ const values=storageFixture();values.settings={backend:'google-web'};assert.equal((await settings()).chapterMode,'standard');
+ values.settings.chapterMode='gemini-direct';assert.equal((await settings()).chapterMode,'gemini-direct');assert.equal((await settings()).backend,'google-web');
 });

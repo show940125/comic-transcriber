@@ -16,7 +16,7 @@ export interface PageData {
   schema: 1; hash: string; width: number; height: number; regions: Region[];
   title: string; chapter: string; glossary: string; summary: string; modelKey: string;
   sourcePageUrl?:string; imageUrl?:string; pageIndex?:number; savedAt?:number; lastAccessAt?:number;
-  refinement?:{fingerprint:string;outputFingerprint?:string;contextKey?:string;at:number;provider:'gemini-web';promptVersion:number};
+  refinement?:{fingerprint:string;outputFingerprint?:string;contextKey?:string;at:number;provider:'gemini-web';promptVersion:number;mode?:'direct'|'refine'};
 }
 export interface Diagnostic {
   stage: Stage; message: string; backend?: string; model?: string; ms?: number;
@@ -32,6 +32,7 @@ export interface Settings {
   wasmThreads: 'auto'|1|2|4;
   autoSites?:string[];
   refineAfterChapter?:boolean;
+  chapterMode?:'standard'|'gemini-direct';
 }
 export const defaults: Settings = {
   backend: 'google-web', model: '2b', localFallback: false, endpoint: 'http://127.0.0.1:8080/v1',
@@ -41,6 +42,7 @@ export const defaults: Settings = {
   pageConcurrency: 2,
   wasmThreads: 'auto',
   refineAfterChapter: true,
+  chapterMode: 'standard',
 };
 export type EngineRequest =
   | { op: 'detect'; image: Blob; width: number; height: number }

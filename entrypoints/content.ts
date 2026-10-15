@@ -1,12 +1,12 @@
 import { defineContentScript } from 'wxt/utils/define-content-script';
-import { settings,loadPage } from '../src/storage';
+import { settings,loadPage,cachePage,ocrReusePages } from '../src/storage';
 import { imageBase64 } from '../src/binary';
 import { mount, unmount } from 'svelte';
 import ChapterDock from '../src/ChapterDock.svelte';
 import {draggableDock} from '../src/dock-position';
 import { chapterImages, imageSource,expectedImageAssignment } from '../src/site-images';
 import type { Diagnostic,PageData } from '../src/types';
-import {loadSession,processSession,encodeSession,sessionData} from '../src/page-pipeline';
+import {loadSession,processSession,encodeSession,sessionData,saveSession} from '../src/page-pipeline';
 import {chapterSnapshot,chapterFingerprint,checkedRefinement,refinementContext} from '../src/chapter-refinement';
 import {runPool,DeferredTranslationError,OrderedTurns} from '../src/scheduling';
 import {extensionCall,detached,onContextInvalidated,invalidateContext,contextAlive,watchExtensionContext} from '../src/extension-context';
@@ -19,27 +19,31 @@ export default defineContentScript({
     document.documentElement.setAttribute('data-comic-active','');
     const original = new WeakMap<HTMLImageElement, string>(), processed = new WeakMap<HTMLImageElement, string>();
     const chapterDrafts=new WeakMap<HTMLImageElement,PageData>();
+    const renderedPages=new WeakMap<HTMLImageElement,string>();
     const known = new WeakSet<HTMLImageElement>(), queue = new Set<HTMLImageElement>();
     let translating = false, dialog: HTMLDivElement | undefined, priorSummary = '', chapterKey = '';
     let closeDialog: (()=>void) | undefined;
     let batchRunning=false,softPaused=false,toolsHidden=false,dock:HTMLDivElement|undefined;
     const lifetime=new AbortController(),activeImages=new Map<HTMLImageElement,Promise<void>>(),activeSources=new Map<HTMLImageElement,string>(),eventDisposers:Array<()=>void>=[];
     let activeRun:Promise<void>|undefined,live=true;let disposeDock:(()=>void)|undefined,runAbort:AbortController|undefined,runUrl='';
-    function applyImage(image:HTMLImageElement,data:Uint8Array<ArrayBuffer>){
+    function applyImage(image:HTMLImageElement,data:Uint8Array<ArrayBuffer>,page?:PageData){
       original.set(image,original.get(image)??imageSource(image));image.dataset.comicOriginal=original.get(image);
       const url=URL.createObjectURL(new Blob([data],{type:'image/png'})),old=image.dataset.comicResult;
       if(old)URL.revokeObjectURL(old);image.dataset.comicResult=url;image.srcset='';image.src=url;image.loading='eager';image.removeAttribute('data-src');image.removeAttribute('data-original');processed.set(image,url);
       image.title='墨譯繁中頁面；按墨譯可校正，雙擊圖片切換原圖';
+      if(page)renderedPages.set(image,chapterSnapshot([page]));
     }
-    async function runImages(images:HTMLImageElement[],report:(d:Diagnostic)=>void,complete:()=>void,stopped:()=>boolean,signal:AbortSignal){
+    async function runImages(images:HTMLImageElement[],report:(d:Diagnostic)=>void,complete:()=>void,stopped:()=>boolean,signal:AbortSignal,ocrOnly=false){
       if(batchRunning){softPaused=false;await extensionCall(()=>chrome.runtime.sendMessage({channel:'translation-resume'}));}
       if(activeRun)await activeRun.catch(()=>{});signal.throwIfAborted();lifetime.signal.throwIfAborted();
       const localAbort=new AbortController();runAbort=localAbort;runUrl=location.href;
       const conf=await settings(),chapterUrl=location.href,controller=AbortSignal.any([signal,lifetime.signal,localAbort.signal]);let failed=false;
+      if(ocrOnly){const status=await extensionCall(()=>chrome.runtime.sendMessage({channel:'gemini-status'}));if(!status?.result?.ready){if(runAbort===localAbort)runAbort=undefined;throw new Error('請先在設定準備匿名 Gemini，再開始整章直譯');}}
+      const reusableOcr=ocrOnly?await ocrReusePages(conf):undefined;
       const key=JSON.stringify([location.origin,location.pathname,conf.title,conf.chapter,conf.glossary]);if(key!==chapterKey){chapterKey=key;priorSummary=conf.priorSummary;}
       const limit=['google-web','chrome','gemini-web'].includes(conf.backend)?conf.pageConcurrency:1,turns=new OrderedTurns();
       const operation=runPool(images,limit,async(image,index)=>{
-        if(image.dataset.comicResult){turns.finish(index);return;}
+        if(image.dataset.comicResult&&!ocrOnly){turns.finish(index);return;}
         if(location.href!==chapterUrl||!image.isConnected)throw new Error('漫畫頁已變更，請重新啟動章節翻譯');
         const existing=activeImages.get(image);if(existing){await existing;return;}
         const jobId=crypto.randomUUID(),started=performance.now(),progress=(d:Diagnostic)=>report({...d,jobId,pageIndex:index});
@@ -54,11 +58,15 @@ export default defineContentScript({
             const source=original.get(image)??imageSource(image);let blob:Blob;
             if(/^https?:/.test(source)){const response=await extensionCall(()=>chrome.runtime.sendMessage({channel:'fetch-image',url:source}));if(!response?.ok)throw new Error(response?.error??'圖片讀取失敗');blob=new Blob([imageBytes(response.base64)],{type:response.mime});}
             else{const response=await bytes(image);blob=new Blob([imageBytes(response.base64)],{type:response.mime});}
-            controller.throwIfAborted();page=await loadSession(blob,{...conf,priorSummary},controller);page.metadata={sourcePageUrl:location.href,imageUrl:source,pageIndex:index};
-            try{await processSession(page,{progress,signal:controller,beforeTranslate:conf.backend==='gemini-web'?async()=>{await turns.wait(index,controller);if(page!.config.priorSummary!==priorSummary){page!.config.priorSummary=priorSummary;page!.regions.forEach(r=>r.translation='');}}:undefined,canTranslate:()=>!failed,onFailure:()=>{failed=true;}});if(conf.backend==='gemini-web')priorSummary=page.regions.map(r=>r.translation).filter(Boolean).join('\n').slice(-1200);}finally{turns.finish(index);}
+            controller.throwIfAborted();page=await loadSession(blob,ocrOnly?{...conf,backend:'gemini-web'}:{...conf,priorSummary},controller);page.metadata={...page.metadata,sourcePageUrl:location.href,imageUrl:source,pageIndex:index};
+            // Reuse verified OCR from the Google cache, keeping its translations
+            // and manual corrections in their original, separate cache entry.
+            if(ocrOnly&&!page.regions.length){const cached=reusableOcr?.get(page.hash);if(cached){page.regions=structuredClone(cached.regions).map(r=>({...r,translation:'',initialTranslation:undefined}));await saveSession(page);}}
+            try{await processSession(page,{ocrOnly,progress,signal:controller,beforeTranslate:conf.backend==='gemini-web'?async()=>{await turns.wait(index,controller);if(page!.config.priorSummary!==priorSummary){page!.config.priorSummary=priorSummary;page!.regions.forEach(r=>r.translation='');}}:undefined,canTranslate:()=>!failed,onFailure:()=>{failed=true;}});if(conf.backend==='gemini-web')priorSummary=page.regions.map(r=>r.translation).filter(Boolean).join('\n').slice(-1200);}finally{turns.finish(index);}
             controller.throwIfAborted();if(location.href!==chapterUrl||!image.isConnected||(original.get(image)??imageSource(image))!==source)throw new Error('漫畫頁或圖片已變更，已存文字保留');
+            if(ocrOnly){chapterDrafts.set(image,sessionData(page));image.dataset.comicOcr=page.hash;progress({stage:'complete',message:'日文 OCR 已保存，等待整章 Gemini 直譯',ms:performance.now()-started});complete();return;}
             progress({stage:'rendering',message:'嵌字及 PNG 編碼'});const renderStarted=performance.now(),data=await encodeSession(page);progress({stage:'rendering',message:'嵌字及 PNG 完成',ms:performance.now()-renderStarted});controller.throwIfAborted();if(!live)return;
-            chapterDrafts.set(image,sessionData(page));applyImage(image,data);image.dataset.comicReview=String(page.regions.filter(r=>r.needsReview||r.warnings.some(w=>/^原文清除需校正|^中文空間不足/.test(w))).length);
+            chapterDrafts.set(image,sessionData(page));applyImage(image,data,chapterDrafts.get(image));image.dataset.comicReview=String(page.regions.filter(r=>r.needsReview||r.warnings.some(w=>/^原文清除需校正|^中文空間不足/.test(w))).length);
             if(limit===1)priorSummary=page.regions.map(r=>r.translation).filter(Boolean).join('\n').slice(-1200);
             progress({stage:'complete',message:'本張完成並已呈現',ms:performance.now()-started});complete();
           }catch(error){
@@ -85,9 +93,9 @@ export default defineContentScript({
         const response = await extensionCall(()=>chrome.runtime.sendMessage({ channel: 'fetch-image', url })); if (!response.ok) throw new Error(response.error); return response;
       }
     }
-    async function refineImages(images:HTMLImageElement[],report:(d:Diagnostic)=>void,signal:AbortSignal){
-      const conf=await settings();if(conf.backend!=='google-web')throw new Error('整章二段校正使用 Google 初譯，請將翻譯來源設為 Google');
-      if(!images.length||images.some(i=>!i.dataset.comicResult||!chapterDrafts.has(i)))throw new Error('請先完成本頁全部圖片的初譯；已完成文字可從快取續翻');
+    async function refineImages(images:HTMLImageElement[],report:(d:Diagnostic)=>void,signal:AbortSignal,direct=false){
+      const storedConf=await settings(),conf=direct?{...storedConf,backend:'gemini-web' as const}:storedConf;if(!direct&&conf.backend!=='google-web')throw new Error('整章二段校正使用 Google 初譯，請將翻譯來源設為 Google');
+      if(!images.length||images.some(i=>(!direct&&!i.dataset.comicResult)||!chapterDrafts.has(i)))throw new Error(direct?'請先完成本頁全部圖片的 OCR':'請先完成本頁全部圖片的初譯；已完成文字可從快取續翻');
       const sources=images.map(i=>original.get(i)??imageSource(i)),chapterUrl=location.href;
       const localAbort=new AbortController();runAbort=localAbort;runUrl=chapterUrl;
       const controller=AbortSignal.any([signal,lifetime.signal,localAbort.signal]),id=crypto.randomUUID();
@@ -95,8 +103,9 @@ export default defineContentScript({
       const refreshDrafts=async()=>{for(const image of images){const saved=chapterDrafts.get(image)!;const cached=await loadPage(saved.hash,saved.modelKey);if(cached)chapterDrafts.set(image,cached);}};
       const assertChapter=()=>{controller.throwIfAborted();const current=chapterImages();if(location.href!==chapterUrl||current.length!==images.length||current.some((i,n)=>i!==images[n]||!i.isConnected||(original.get(i)??imageSource(i))!==sources[n]))throw new Error('漫畫頁或圖片已變更，二段校正不套用');};
       await refreshDrafts();assertChapter();
-      const input=structuredClone(currentPages()),snapshot=chapterSnapshot(input),fingerprint=await chapterFingerprint(input),contextKey=await refinementContext(conf);
-      if(input.every(p=>p.refinement?.outputFingerprint===fingerprint&&p.refinement.contextKey===contextKey)){report({stage:'complete',message:'整章校正已完成，沿用已存結果'});if(runAbort===localAbort)runAbort=undefined;return;}
+      const input=structuredClone(currentPages()),snapshot=chapterSnapshot(input),fingerprint=await chapterFingerprint(input),contextKey=await refinementContext(conf,direct);
+      const reused=input.every(p=>p.refinement?.outputFingerprint===fingerprint&&p.refinement.contextKey===contextKey);
+      if(reused&&images.every((i,n)=>i.dataset.comicResult&&renderedPages.get(i)===chapterSnapshot([input[n]]))){report({stage:'complete',message:'整章翻譯／校正已完成，沿用已存結果'});if(runAbort===localAbort)runAbort=undefined;return;}
       const readiness=await extensionCall(()=>chrome.runtime.sendMessage({channel:'gemini-status'}));
       if(!readiness?.ok||!readiness.result?.ready){if(runAbort===localAbort)runAbort=undefined;throw new Error(readiness?.error??'Google 初譯已完成；請先在設定準備匿名 Gemini，才能進行整章校正');}
       const listener=(m:any)=>{if(m.channel==='progress'&&m.id===id)report(m.diagnostic);};
@@ -105,21 +114,24 @@ export default defineContentScript({
       try{
         assertChapter();const slot=await extensionCall(()=>chrome.runtime.sendMessage({channel:'image-slot-acquire',id}));if(!slot?.ok)throw new Error(slot?.error??'校正排程未回應');
         await extensionCall(()=>chrome.runtime.onMessage.addListener(listener));assertChapter();
-        report({stage:'translating',message:`Google 初譯完成，Gemini 正在閱讀整章 ${images.length} 張`,backend:'gemini-web/refinement'});
-        const response=await extensionCall(()=>chrome.runtime.sendMessage({channel:'gemini-refine',id,pages:input,settings:conf}));assertChapter();
+        report({stage:'translating',message:`${direct?'OCR 完成':'Google 初譯完成'}，Gemini 正在閱讀整章 ${images.length} 張`,backend:'gemini-web/refinement'});
+        const response=reused?{ok:true,result:{pages:input,fingerprint,regions:input.flatMap(p=>p.regions).filter(r=>r.translation).length,changed:0,ms:0}}:await extensionCall(()=>chrome.runtime.sendMessage({channel:direct?'gemini-chapter':'gemini-refine',id,pages:input,settings:conf}));assertChapter();
         if(!response?.ok)throw new Error(response?.error??'整章校正未回應；保留 Google 初譯');
         if(response.result.fingerprint!==fingerprint)throw new Error('整章校正輸入指紋不一致');
-        const latest=await settings();if(latest.backend!==conf.backend||await refinementContext(latest)!==contextKey)throw new Error('翻譯設定、上下文或專屬指示已變更，舊校正結果不套用');
+        const latest=await settings();if(latest.backend!==storedConf.backend||latest.chapterMode!==storedConf.chapterMode||await refinementContext(latest,direct)!==contextKey)throw new Error('翻譯設定、上下文或專屬指示已變更，舊校正結果不套用');
         await refreshDrafts();assertChapter();
         const output=checkedRefinement(currentPages(),snapshot,response.result);
+        // Persist all validated translations before PNG work. A later rendering
+        // cancellation can resume from this result without another Gemini call.
+        for(let index=0;index<output.length;index++){await cachePage(output[index]);chapterDrafts.set(images[index],output[index]);}
         // Validate the entire response before changing any displayed page.
         for(let index=0;index<images.length;index++){
           assertChapter();const image=images[index],p=output[index];report({stage:'rendering',message:`整章校正核對完成，重排 ${index+1}/${images.length}`,pageIndex:index});
           const data=await bytes(image),page=await loadSession(new Blob([imageBytes(data.base64)],{type:data.mime}),conf,controller);
-          try{if(page.hash!==p.hash)throw new Error('圖片內容已變更，停止套用校正');page.regions=p.regions;page.metadata={sourcePageUrl:chapterUrl,imageUrl:sources[index],pageIndex:index,refinement:p.refinement};const png=await encodeSession(page);assertChapter();chapterDrafts.set(image,sessionData(page));applyImage(image,png);}
+          try{if(page.hash!==p.hash)throw new Error('圖片內容已變更，停止套用校正');page.regions=p.regions;page.metadata={sourcePageUrl:chapterUrl,imageUrl:sources[index],pageIndex:index,refinement:p.refinement};const png=await encodeSession(page);assertChapter();chapterDrafts.set(image,sessionData(page));applyImage(image,png,chapterDrafts.get(image));}
           finally{page.dispose();}
         }
-        report({stage:'complete',message:`整章二段校正完成：${response.result.regions} 個區域，修改 ${response.result.changed} 處`,backend:'gemini-web/refinement',ms:response.result.ms});
+        report({stage:'complete',message:direct?`整章 Gemini 直譯完成：${images.length} 張、${response.result.regions} 個區域`:`整章二段校正完成：${response.result.regions} 個區域，修改 ${response.result.changed} 處`,backend:'gemini-web/refinement',ms:response.result.ms});
       }finally{controller.removeEventListener('abort',cancel);if(contextAlive()){detached(()=>chrome.runtime.onMessage.removeListener(listener));detached(()=>chrome.runtime.sendMessage({channel:'image-slot-release',id}));}if(runAbort===localAbort)runAbort=undefined;}
     }
     async function open(image: HTMLImageElement, auto = false, report?:(diagnostic:Diagnostic)=>void) {
@@ -152,9 +164,9 @@ export default defineContentScript({
       return new Promise<void>(resolve => {
         let closed=false;
         const close=()=>{if(closed)return;closed=true;void unmount(component).catch(()=>{});holder.remove();if(dialog===holder){dialog=undefined;closeDialog=undefined;}resolve();};
-        const component=mount(Reader,{target:container,props:{siteInput:{...input,auto,priorSummary,sourcePageUrl:location.href,pageIndex:Math.max(0,chapterImages().indexOf(image))},onSiteProgress:report,onSiteBusy:busy=>{for(const control of pager.querySelectorAll('button,select'))(control as HTMLButtonElement).disabled=busy||(control as HTMLElement).dataset.outside==='true';},onSiteReview:count=>{image.dataset.comicReview=String(count);},onSiteSummary:summary=>{if(auto)priorSummary=summary;},onSiteApply:(data,page)=>{
+        const component=mount(Reader,{target:container,props:{siteInput:{...input,auto,priorSummary,pageData:chapterDrafts.get(image),sourcePageUrl:location.href,pageIndex:Math.max(0,chapterImages().indexOf(image))},onSiteProgress:report,onSiteBusy:busy=>{for(const control of pager.querySelectorAll('button,select'))(control as HTMLButtonElement).disabled=busy||(control as HTMLElement).dataset.outside==='true';},onSiteReview:count=>{image.dataset.comicReview=String(count);},onSiteSummary:summary=>{if(auto)priorSummary=summary;},onSiteApply:(data,page)=>{
             if(closed||!live||!image.isConnected||(original.get(image)??imageSource(image))!==source)throw new Error('工作台目標圖片已變更，請重新開啟');
-            if(page)chapterDrafts.set(image,page);applyImage(image,data);
+            if(page)chapterDrafts.set(image,page);applyImage(image,data,page);
             if(auto)close();
           },onSiteError:error=>{image.dataset.comicError=error;if(auto)close();}}});
         if(!auto){const button=document.createElement('button');button.type='button';button.textContent='關閉工作台';button.style.cssText='position:absolute;right:15px;top:5px;z-index:2;font:14px sans-serif;padding:6px 10px;cursor:pointer';button.onclick=close;shadow.append(button);closeDialog=close;}
