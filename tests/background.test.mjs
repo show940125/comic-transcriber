@@ -2,15 +2,15 @@ import {test} from 'node:test';import assert from 'node:assert/strict';import {b
 const bundle=await build({entryPoints:['entrypoints/background.ts'],absWorkingDir:fileURLToPath(new URL('..',import.meta.url)),bundle:true,platform:'node',format:'esm',write:false,plugins:[{name:'background-shim',setup(b){b.onResolve({filter:/^wxt\/utils\/define-background$/},()=>({path:'shim',namespace:'test'}));b.onLoad({filter:/.*/,namespace:'test'},()=>({contents:'export const defineBackground=fn=>fn;',loader:'js'}));}}]});
 const script=Buffer.from(bundle.outputFiles[0].contents).toString('base64');
 const deferred=()=>{let resolve;const promise=new Promise(r=>resolve=r);return {promise,resolve};};
-async function fixture({cold=false,delayCreate=false}={}){
- const data={},events=[],handlers=[];let document=false,engineGate,closeGate,receiverReady=!cold;const createGate=delayCreate?deferred():undefined;
+async function fixture({cold=false,delayCreate=false,permissionContains=async()=>true}={}){
+ const data={},events=[],handlers=[],registered=[];let document=false,engineGate,closeGate,receiverReady=!cold;const createGate=delayCreate?deferred():undefined;
  const event={addListener(){}};
  globalThis.chrome={runtime:{id:'fixture',getURL:p=>'chrome-extension://fixture/'+p.replace(/^\//,''),onMessage:{addListener:f=>handlers.push(f)},onInstalled:event,sendMessage:async m=>{
   events.push(m.channel);if(m.channel.startsWith('offscreen')&&!receiverReady)throw Error('Could not establish connection. Receiving end does not exist.');if(m.channel==='offscreen-ready')return {ok:true,ready:true};if(m.channel==='offscreen')return engineGate?engineGate.promise:{ok:true,result:[]};if(m.channel==='offscreen-release')return closeGate?closeGate.promise:{ok:true};if(m.channel==='offscreen-runtime-status')return {ok:true,result:{worker:true,models:3}};return {ok:true};
- }},offscreen:{hasDocument:async()=>document,createDocument:async()=>{events.push('create');document=true;if(createGate)await createGate.promise;},closeDocument:async()=>{events.push('close');document=false;}},contextMenus:{onClicked:event},tabs:{onRemoved:event},storage:{onChanged:event,session:{get:async k=>({[k]:data[k]}),set:async v=>Object.assign(data,v),remove:async k=>{delete data[k];}},local:{get:async k=>Object.fromEntries((Array.isArray(k)?k:[k]).map(key=>[key,data[key]])),set:async v=>Object.assign(data,v)}},permissions:{contains:async()=>true}};
+ }},offscreen:{hasDocument:async()=>document,createDocument:async()=>{events.push('create');document=true;if(createGate)await createGate.promise;},closeDocument:async()=>{events.push('close');document=false;}},contextMenus:{onClicked:event},tabs:{onRemoved:event},storage:{onChanged:event,session:{get:async k=>({[k]:data[k]}),set:async v=>Object.assign(data,v),remove:async k=>{delete data[k];}},local:{get:async k=>Object.fromEntries((Array.isArray(k)?k:[k]).map(key=>[key,data[key]])),set:async v=>Object.assign(data,v)}},permissions:{contains:permissionContains},scripting:{unregisterContentScripts:async()=>{},registerContentScripts:async rows=>{registered.push(...rows);}}};
  const entry=await import('data:text/javascript;base64,'+script+'#'+Math.random());entry.default();
  const send=(m,url='chrome-extension://fixture/options.html')=>new Promise((resolve,reject)=>{try{const keep=handlers[0](m,{id:'fixture',url},resolve);if(keep!==true)resolve(undefined);}catch(e){reject(e);}});
- return {send,data,events,engineWait:()=>engineGate=deferred(),closeWait:()=>closeGate=deferred(),isOpen:()=>document,ready:()=>{receiverReady=true;createGate?.resolve();}};
+ return {send,data,events,registered,engineWait:()=>engineGate=deferred(),closeWait:()=>closeGate=deferred(),isOpen:()=>document,ready:()=>{receiverReady=true;createGate?.resolve();}};
 }
 
 test('two cold-start image jobs wait for the same document and receiver before dispatch',async()=>{
@@ -68,4 +68,22 @@ test('unknown Gemini locks survive bounded diagnostic rotation until manual unlo
  assert.equal(f.data.geminiJobs.length,30);assert(!f.data.geminiJobs.some(j=>j.requestId==='old'));
  const retry=await f.send({channel:'gemini-record',job:{...job,requestId:'retry'}},url);assert.equal(retry.ok,false);assert.match(retry.error,/結果未知/);
  await f.send({channel:'gemini-unlock'});assert.equal((await f.send({channel:'gemini-record',job:{...job,requestId:'manual-retry'}},url)).ok,true);delete globalThis.chrome;
+});
+
+test('a different CDN origin can be fetched with broad granted website access',async()=>{
+ const f=await fixture(),original=globalThis.fetch;let calls=0;
+ globalThis.fetch=async()=>{calls++;return new Response(new Uint8Array([1,2,3]),{headers:{'Content-Type':'image/png'}});};
+ try{const result=await f.send({channel:'fetch-image',url:'https://a2.gold-usergeneratedcontent.net/test.png'});assert.equal(result.ok,true);assert.equal(result.mime,'image/png');assert.equal(result.base64,'AQID');assert.equal(calls,1);assert(!f.events.includes('create'));}finally{globalThis.fetch=original;delete globalThis.chrome;}
+});
+test('withheld browser access is reported clearly and private endpoints stay blocked',async()=>{
+ const f=await fixture({permissionContains:async()=>false}),original=globalThis.fetch;let calls=0;globalThis.fetch=async()=>{calls++;throw Error('unexpected fetch');};
+ try{
+  const result=await f.send({channel:'fetch-image',url:'https://a2.gold-usergeneratedcontent.net/test.png'});assert.equal(result.ok,false);assert.equal(result.code,'HOST_ACCESS_REQUIRED');assert.match(result.error,/授權所有網站與圖片 CDN/);
+  const privateResult=await f.send({channel:'fetch-image',url:'http://127.0.0.1/private.png'});assert.equal(privateResult.ok,false);assert.equal(calls,0);
+ }finally{globalThis.fetch=original;delete globalThis.chrome;}
+});
+test('automatic injection retains only explicitly selected concrete websites after broad grants',async()=>{
+ const f=await fixture();f.data.settings={auto:true,autoSites:['https://*/*','http://*/*','https://manga.example/*']};
+ try{assert.equal((await f.send({channel:'auto-scripts'})).ok,true);assert.deepEqual(f.registered[0].matches,['https://manga.example/*']);}
+ finally{delete globalThis.chrome;}
 });

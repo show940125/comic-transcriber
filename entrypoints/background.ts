@@ -8,6 +8,7 @@ import {SerialLane,ResourceSlots} from '../src/scheduling';
 import type {Settings} from '../src/types';
 import {geminiOrigin} from '../src/gemini-web';
 import {waitForOffscreenReady} from '../src/offscreen-ready';
+import {specificSites} from '../src/site-access';
 export default defineBackground(() => {
   let creating: Promise<void> | undefined;
   let closing:Promise<void>|undefined,maintenance=false,releaseRequested=false,geminiValidationRunning=false;
@@ -18,7 +19,7 @@ export default defineBackground(() => {
   async function releaseRuntime(){releaseRequested=true;if(leases.size)return {ok:true,released:false,busy:true};
     closing??=(async()=>{if(creating)await creating;if(await chrome.offscreen.hasDocument()){await chrome.runtime.sendMessage({channel:'offscreen-release'});await chrome.offscreen.closeDocument();}releaseRequested=false;await chrome.storage.session.set({runtimeReleasedAt:Date.now()});})().finally(()=>{closing=undefined;});await closing;return {ok:true,released:true};}
   async function activate(tabId:number){await chrome.scripting.executeScript({target:{tabId},files:['content-scripts/content.js']});}
-  async function autoScripts(){const {settings={}}=await chrome.storage.local.get('settings'),conf=settings as Partial<Settings>;await chrome.scripting.unregisterContentScripts({ids:['comic-auto']}).catch(()=>{});if(conf.auto&&conf.autoSites?.length)await chrome.scripting.registerContentScripts([{id:'comic-auto',matches:conf.autoSites,js:['content-scripts/content.js'],runAt:'document_idle'}]);}
+  async function autoScripts(){const {settings={}}=await chrome.storage.local.get('settings'),conf=settings as Partial<Settings>,sites=specificSites(conf.autoSites);await chrome.scripting.unregisterContentScripts({ids:['comic-auto']}).catch(()=>{});if(conf.auto&&sites.length)await chrome.scripting.registerContentScripts([{id:'comic-auto',matches:sites,js:['content-scripts/content.js'],runAt:'document_idle'}]);}
   const jobs = new Map<string, Promise<unknown>>();
   chrome.storage.onChanged.addListener((changes,area)=>{if(area==='local'&&changes.settings)void autoScripts().catch(console.warn);});
   const owners = new Map<string,{tabId:number;frameId:number}>();
@@ -178,7 +179,7 @@ export default defineBackground(() => {
       const task = async () => {
         const url = publicImageUrl(message.url);
         const granted = await chrome.permissions.contains({ origins: [`${url.origin}/*`] });
-        if (!granted) return { ok: false, error: `圖片來源尚未授權：${url.origin}`, permissionOrigin: `${url.origin}/*` };
+        if (!granted) return { ok: false, code:'HOST_ACCESS_REQUIRED',error: `Chrome 已限制圖片網站存取：${url.origin}；請按墨譯圖示的「授權所有網站與圖片 CDN」，再繼續翻譯`, permissionOrigin: `${url.origin}/*` };
         const res = await fetch(url.href, { credentials: 'omit', redirect: 'error', signal:AbortSignal.timeout(15000) });
         if (!res.ok || !res.headers.get('content-type')?.startsWith('image/')) throw new Error('無法取得圖片');
         if (Number(res.headers.get('content-length')) > 20 * 1024 * 1024) throw new Error('圖片超過 20 MB');

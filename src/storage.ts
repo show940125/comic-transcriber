@@ -1,11 +1,13 @@
 import { defaults, type Settings, type PageData } from './types';
 import { compatiblePageKey,translationInstructions,translationInstructionsLimit } from './core';
 import {extensionCall} from './extension-context';
+import {specificSites} from './site-access';
 export async function settings(): Promise<Settings> {
   const result = await extensionCall(()=>chrome.storage.local.get('settings'));
   const value={ ...defaults, ...(result.settings as Partial<Settings> | undefined) };
   value.pageConcurrency=value.pageConcurrency===1?1:2;
   value.translationInstructions=translationInstructions(value);
+  value.autoSites=specificSites(value.autoSites);
   // Gemini now performs the optional whole-chapter second pass.
   if(value.backend==='gemini-web')value.backend='google-web';return value;
 }

@@ -190,3 +190,7 @@ content script 經背景的 `gemini-status` 檢查權限與協定，再送 `gemi
 ## 回報問題
 
 Issue 請附擴充套件與瀏覽器版本、翻譯模式、操作步驟及錯誤訊息。網站相容性問題可附閱讀器網址或經授權的最小範例；OCR 問題可附裁切範例與正確原文。帳密、cookies、完整瀏覽器 profile 及無權公開的漫畫內容應留在本機。
+
+## 0.1.13 網站與 CDN 存取
+
+Manifest 的 required host permissions 為 `http://*/*` 與 `https://*/*`。背景讀圖依實際權限檢查；Chrome 收回網站存取時，提示從插件圖示或可見設定頁恢復所有網站權限。權限請求由使用者點擊直接觸發。頁內工具保持按需注入；`autoSites` 僅接受具體網站 pattern，過濾 wildcard 與編碼主機名稱，避免全網站存取權變成全網站自動翻譯。驗證範圍見 [0.1.13 紀錄](research-0.1.13.md)。

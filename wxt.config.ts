@@ -1,4 +1,5 @@
 import { defineConfig } from 'wxt';
+import {allWebOrigins} from './src/site-access';
 export default defineConfig({
   modules: ['@wxt-dev/module-svelte'],
   svelte: { vite: { emitCss: false } },
@@ -7,8 +8,7 @@ export default defineConfig({
     permissions: ['storage', 'contextMenus', 'offscreen', 'activeTab','scripting'],
     cross_origin_embedder_policy:{value:'require-corp'},
     cross_origin_opener_policy:{value:'same-origin'},
-    host_permissions: ['https://huggingface.co/*', 'https://*.hf.co/*', 'https://translate.googleapis.com/*', 'http://127.0.0.1/*', 'http://localhost/*'],
-    optional_host_permissions: ['https://*/*', 'http://*/*'],
+    host_permissions: allWebOrigins,
     content_security_policy: { extension_pages: "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'" },
     web_accessible_resources: [{ resources: ['reader.html', 'assets/*'], matches: ['<all_urls>'] }],
   },
