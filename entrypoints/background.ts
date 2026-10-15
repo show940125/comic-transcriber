@@ -7,12 +7,13 @@ import {importCorrection} from '../src/core';
 import {SerialLane,ResourceSlots} from '../src/scheduling';
 import type {Settings} from '../src/types';
 import {geminiOrigin} from '../src/gemini-web';
+import {waitForOffscreenReady} from '../src/offscreen-ready';
 export default defineBackground(() => {
   let creating: Promise<void> | undefined;
   let closing:Promise<void>|undefined,maintenance=false,releaseRequested=false,geminiValidationRunning=false;
   const leases=new Set<string>();
   const pageLeaseOwners=new Map<string,number>();
-  async function syncBusy(){if(await chrome.offscreen.hasDocument())await chrome.runtime.sendMessage({channel:'offscreen-busy',count:leases.size});if(!leases.size&&releaseRequested)await releaseRuntime();}
+  async function syncBusy(){if(creating)await creating;if(await chrome.offscreen.hasDocument())await chrome.runtime.sendMessage({channel:'offscreen-busy',count:leases.size});if(!leases.size&&releaseRequested&&!closing)await releaseRuntime();}
   function lease(id:string){leases.add(id);void syncBusy().catch(()=>{});return ()=>{leases.delete(id);void syncBusy().catch(()=>{});};}
   async function releaseRuntime(){releaseRequested=true;if(leases.size)return {ok:true,released:false,busy:true};
     closing??=(async()=>{if(creating)await creating;if(await chrome.offscreen.hasDocument()){await chrome.runtime.sendMessage({channel:'offscreen-release'});await chrome.offscreen.closeDocument();}releaseRequested=false;await chrome.storage.session.set({runtimeReleasedAt:Date.now()});})().finally(()=>{closing=undefined;});await closing;return {ok:true,released:true};}
@@ -27,10 +28,12 @@ export default defineBackground(() => {
   chrome.tabs.onRemoved.addListener(tabId=>{imageSlots.releaseOwner(tabId);for(const [id,owner]of pageLeaseOwners)if(owner===tabId){leases.delete('image:'+id);pageLeaseOwners.delete(id);}void syncBusy().catch(()=>{});for(const [id,owner]of owners)if(owner.tabId===tabId)void chrome.runtime.sendMessage({channel:'offscreen-cancel',id}).catch(()=>{});});
   async function offscreen() {
     if(closing)await closing;
-    if (await chrome.offscreen.hasDocument()) return;
-    creating ??= chrome.offscreen.createDocument({ url: 'offscreen.html', reasons: ['WORKERS'], justification: '離線漫畫模型的專用推論 Worker' }).finally(() => { creating = undefined; });
+    creating ??= (async()=>{
+      if(!await chrome.offscreen.hasDocument())await chrome.offscreen.createDocument({ url: 'offscreen.html', reasons: ['WORKERS'], justification: '離線漫畫模型的專用推論 Worker' });
+      await waitForOffscreenReady(()=>chrome.runtime.sendMessage({channel:'offscreen-ready'}));
+      await chrome.runtime.sendMessage({channel:'offscreen-busy',count:leases.size});
+    })().finally(() => { creating = undefined; });
     await creating;
-    await syncBusy();
   }
   chrome.runtime.onInstalled.addListener(details => {
     void autoScripts().catch(console.warn);

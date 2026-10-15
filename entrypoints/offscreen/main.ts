@@ -38,6 +38,7 @@ const release=()=>{clearInterval(heartbeat);idle.dispose();worker?.terminate();w
 addEventListener('pagehide',release);
 chrome.runtime.onMessage.addListener((message, sender, reply) => {
   if (sender.id !== chrome.runtime.id) return;
+  if(message.channel==='offscreen-ready'){reply({ok:true,ready:true});return;}
   if(message.channel==='offscreen-busy'){globallyBusy=message.count;idle.activity(globallyBusy);reply({ok:true});return;}
   if(message.channel==='offscreen-release'){release();reply({ok:true});return;}
   if(message.channel==='offscreen-runtime-status'){

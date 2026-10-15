@@ -2,7 +2,7 @@ import { chromium } from 'playwright';
 import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { testProfile, freshWorker } from './harness.mjs';
+import { launchTestContext,testProfile, freshWorker } from './harness.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const result = { schema: 1, checkedAt: new Date().toISOString(), billing: 'no key, credentials or Cloud billing used', web: [], builtin: {} };
@@ -20,10 +20,11 @@ for (const source of ['今日はいい天気だね。', '一緒に帰ろう。']
   } catch (error) { result.web.push({ source, error: String(error), ms: performance.now() - start }); break; }
 }
 const ext = path.join(root, '.output/chrome-mv3');
-const context = await chromium.launchPersistentContext(await testProfile(root, 'chrome-translator'), {
+let context;
+try {
+ context = await launchTestContext(chromium,await testProfile(root, 'chrome-translator'), {
   channel: 'chromium', headless: true, args: [`--disable-extensions-except=${ext}`, `--load-extension=${ext}`]
 });
-try {
   const worker = await freshWorker(context), id = worker.url().split('/')[2], page = await context.newPage();
   await page.goto(`chrome-extension://${id}/reader.html`);
   result.builtin = await page.evaluate(async () => ({
@@ -31,6 +32,6 @@ try {
     availability: 'Translator' in self ? await Translator.availability({ sourceLanguage: 'ja', targetLanguage: 'zh-Hant' }) : 'API absent'
   }));
 } catch (error) { result.builtin.error = String(error); }
-finally { await context.close(); }
+finally { await context?.close(); }
 await writeFile(path.join(root, 'artifacts/google-free-probe.json'), JSON.stringify(result, null, 2));
 console.log(JSON.stringify(result, null, 2));

@@ -1,14 +1,15 @@
 import { defaults, type Settings, type PageData } from './types';
-import { compatiblePageKey } from './core';
+import { compatiblePageKey,translationInstructions,translationInstructionsLimit } from './core';
 import {extensionCall} from './extension-context';
 export async function settings(): Promise<Settings> {
   const result = await extensionCall(()=>chrome.storage.local.get('settings'));
   const value={ ...defaults, ...(result.settings as Partial<Settings> | undefined) };
   value.pageConcurrency=value.pageConcurrency===1?1:2;
+  value.translationInstructions=translationInstructions(value);
   // Gemini now performs the optional whole-chapter second pass.
   if(value.backend==='gemini-web')value.backend='google-web';return value;
 }
-export async function saveSettings(value: Settings) { await extensionCall(()=>chrome.storage.local.set({ settings: value })); }
+export async function saveSettings(value: Settings) { if(typeof value.translationInstructions!=='string'||value.translationInstructions.length>translationInstructionsLimit)throw new Error('漫畫專屬翻譯指示最多 3,000 字');await extensionCall(()=>chrome.storage.local.set({ settings: {...value,translationInstructions:translationInstructions(value)} })); }
 let writeTail:Promise<unknown>=Promise.resolve();
 export function storageWrite<T>(work:()=>Promise<T>):Promise<T>{const next=writeTail.catch(()=>{}).then(work);writeTail=next;return next;}
 export async function cachePage(page: PageData) {

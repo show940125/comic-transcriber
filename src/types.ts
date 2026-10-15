@@ -27,6 +27,7 @@ export interface Settings {
   backend: 'webllm' | 'local' | 'chrome' | 'google-web' | 'gemini-web'; model: '2b' | '0.8b'; localFallback: boolean;
   endpoint: string; localModel: string; ocrEndpoint: string; localOcr: boolean; ocrProvider: 'auto' | 'wasm';
   auto: boolean; glossary: string; title: string; chapter: string; priorSummary: string;
+  translationInstructions: string;
   pageConcurrency: 1 | 2;
   wasmThreads: 'auto'|1|2|4;
   autoSites?:string[];
@@ -36,6 +37,7 @@ export const defaults: Settings = {
   backend: 'google-web', model: '2b', localFallback: false, endpoint: 'http://127.0.0.1:8080/v1',
   localModel: '', ocrEndpoint: 'http://127.0.0.1:8766', localOcr: false, ocrProvider: 'wasm',
   auto: false, glossary: '', title: '', chapter: '', priorSummary: '',
+  translationInstructions: '',
   pageConcurrency: 2,
   wasmThreads: 'auto',
   refineAfterChapter: true,

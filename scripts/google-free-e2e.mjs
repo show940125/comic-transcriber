@@ -4,14 +4,15 @@ import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
-import { testProfile, freshWorker } from './harness.mjs';
+import { launchTestContext,testProfile, freshWorker } from './harness.mjs';
 const root = fileURLToPath(new URL('../', import.meta.url)), ext = path.join(root, '.output/chrome-mv3');
 const report = { schema:1, checkedAt:new Date().toISOString(), network:[], billing:'no key or billing account used', source:'original synthetic page-01; GT coordinates to isolate translation', checks:[] };
 const manifest = JSON.parse(await readFile(path.join(root, 'artifacts/corpus/manifest.json'), 'utf8'));
 const bytes = await readFile(path.join(root, 'artifacts/corpus/pages/page-01.png'));
 const correction = { schema:1,hash:createHash('sha256').update(bytes).digest('hex'),width:1000,height:1500,regions:manifest.pages[0].regions.map(r=>({...r,translation:'',render:'auto',warnings:[]})) };
-const context = await chromium.launchPersistentContext(await testProfile(root, 'google-free'), { channel:'chromium',headless:true,args:[`--disable-extensions-except=${ext}`,`--load-extension=${ext}`],viewport:{width:1440,height:1000} });
+let context;
 try {
+ context = await launchTestContext(chromium,await testProfile(root, 'google-free'), { channel:'chromium',headless:true,args:[`--disable-extensions-except=${ext}`,`--load-extension=${ext}`],viewport:{width:1440,height:1000} });
  const worker=await freshWorker(context),id=worker.url().split('/')[2],page=await context.newPage();
  await page.goto(`chrome-extension://${id}/options.html`);await page.waitForLoadState('networkidle');
  await page.getByLabel('執行方式').selectOption('google-web');await page.getByRole('button',{name:'儲存設定',exact:true}).click();await page.getByRole('status').filter({hasText:'設定已儲存'}).waitFor();
@@ -40,5 +41,5 @@ try {
    Object.assign(report.builtin,await page.evaluate(()=>({...window.__builtinResult,downloadProgress:window.__builtinProgress})));console.log('Built-in translator:',JSON.stringify(report.builtin));
  }
  report.status='passed-google-web; builtin availability reported separately';
-} catch(error){report.status='failed';report.error=String(error);report.pages=await Promise.all(context.pages().map(async page=>({url:page.url(),body:await page.locator('body').innerText().catch(()=>null)})));process.exitCode=1;}
-finally{await context.close();await writeFile(path.join(root,'artifacts/google-free-e2e.json'),JSON.stringify(report,null,2));console.log(JSON.stringify({status:report.status,pageMs:report.pageMs,requests:report.network.length,builtin:report.builtin,error:report.error},null,2));}
+} catch(error){report.status='failed';report.error=String(error);report.pages=await Promise.all((context?.pages()??[]).map(async page=>({url:page.url(),body:await page.locator('body').innerText().catch(()=>null)})));process.exitCode=1;}
+finally{await context?.close();await writeFile(path.join(root,'artifacts/google-free-e2e.json'),JSON.stringify(report,null,2));console.log(JSON.stringify({status:report.status,pageMs:report.pageMs,requests:report.network.length,builtin:report.builtin,error:report.error},null,2));}

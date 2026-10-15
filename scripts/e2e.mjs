@@ -4,7 +4,7 @@ import { createServer } from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
-import { freshWorker, testProfile } from './harness.mjs';
+import { freshWorker, launchTestContext,testProfile } from './harness.mjs';
 const root=fileURLToPath(new URL('../',import.meta.url));
 const report={started:new Date().toISOString(),checks:[],errors:[],network:[],gpu:null};
 await mkdir(path.join(root,'artifacts/e2e'),{recursive:true});
@@ -26,7 +26,7 @@ await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
 const port=server.address().port,extension=path.join(root,'.output/chrome-mv3');
 let context, page;
 try{
-  context=await chromium.launchPersistentContext(await testProfile(root,'e2e'),{channel:'chromium',headless:true,args:[`--disable-extensions-except=${extension}`,`--load-extension=${extension}`],viewport:{width:1440,height:1000}});
+  context=await launchTestContext(chromium,await testProfile(root,'e2e'),{channel:'chromium',headless:true,args:[`--disable-extensions-except=${extension}`,`--load-extension=${extension}`],viewport:{width:1440,height:1000}});
   const worker=await freshWorker(context);
   const id=worker.url().split('/')[2],url=`chrome-extension://${id}`;
   page=await context.newPage();page.on('pageerror',error=>report.errors.push(String(error)));

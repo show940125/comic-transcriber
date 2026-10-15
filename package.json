@@ -1,6 +1,6 @@
 {
   "name": "comic-transcriber",
-  "version": "0.1.11",
+  "version": "0.1.12",
   "private": true,
   "type": "module",
   "license": "Apache-2.0",
@@ -16,6 +16,8 @@
     "native:assets": "node scripts/prepare-native.mjs",
     "package": "node scripts/package.mjs",
     "report": "node scripts/report.mjs",
+    "storage:report": "node scripts/storage-cleanup.mjs",
+    "storage:clean": "node scripts/storage-cleanup.mjs",
     "postinstall": "wxt prepare"
   },
   "dependencies": {

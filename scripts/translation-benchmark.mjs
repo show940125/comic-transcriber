@@ -2,7 +2,7 @@ import { chromium } from 'playwright';
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { freshWorker, testProfile } from './harness.mjs';
+import { freshWorker, launchTestContext,testProfile } from './harness.mjs';
 const root=fileURLToPath(new URL('../',import.meta.url));
 const corpus=JSON.parse(await readFile(path.join(root,'artifacts/corpus/manifest.json'),'utf8'));
 const lock=JSON.parse(await readFile(path.join(root,'src/model-lock.json'),'utf8'));
@@ -11,8 +11,9 @@ const count=Number(process.env.BENCHMARK_PAGES??30);
 const extension=path.join(root,'.output/chrome-mv3');
 await mkdir(path.join(root,'artifacts/translation-profile'),{recursive:true});
 const profile=await testProfile(root,'translation');output.profile=path.basename(profile);
-const context=await chromium.launchPersistentContext(profile,{channel:'chromium',headless:true,args:[`--disable-extensions-except=${extension}`,`--load-extension=${extension}`]});
+let context;
 try{
+ context=await launchTestContext(chromium,profile,{channel:'chromium',headless:true,args:[`--disable-extensions-except=${extension}`,`--load-extension=${extension}`]});
   const worker=await freshWorker(context);
   const id=worker.url().split('/')[2],page=await context.newPage();
   await page.goto(`chrome-extension://${id}/reader.html`);await page.waitForLoadState('networkidle');
@@ -45,4 +46,4 @@ try{
     const response=await page.evaluate(async({regions,modelId})=>{const settings={backend:'webllm',model:'2b',title:'',chapter:'',glossary:'',priorSummary:'',localModel:'',endpoint:'http://127.0.0.1:8080/v1'};return chrome.runtime.sendMessage({channel:'engine',id:crypto.randomUUID(),request:{op:'translate',regions,settings,modelId}});},{regions:corpus.pages[0].regions.slice(0,1),modelId:selected.modelId});output.warmOffline={ok:response.ok,error:response.error,result:response.result};
   }
 }catch(error){output.error=String(error);output.status='failed';process.exitCode=1;}
-finally{await context.close();output.finished=new Date().toISOString();await writeFile(path.join(root,'artifacts/translation-benchmark.json'),JSON.stringify(output,null,2));console.log(JSON.stringify({status:output.status,models:output.models.map(m=>({model:m.modelId,metrics:m.metrics,failures:m.failures})),error:output.error}));}
+finally{await context?.close();output.finished=new Date().toISOString();await writeFile(path.join(root,'artifacts/translation-benchmark.json'),JSON.stringify(output,null,2));console.log(JSON.stringify({status:output.status,models:output.models.map(m=>({model:m.modelId,metrics:m.metrics,failures:m.failures})),error:output.error}));}

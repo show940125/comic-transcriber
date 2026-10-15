@@ -4,16 +4,17 @@ import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import assert from 'node:assert/strict';
 import {createServer} from 'node:http';import {spawn} from 'node:child_process';
-import {testProfile,freshWorker} from './harness.mjs';
+import {launchTestContext,testProfile,freshWorker} from './harness.mjs';
 const root=fileURLToPath(new URL('../',import.meta.url)),browser=process.env.TEST_BROWSER??'chromium',label=browser==='msedge'?'edge':'chrome';
 const ext=path.join(root,'.output/chrome-mv3'),fixture=process.env.TEST_IMAGE??path.join(root,'artifacts/corpus/pages/page-01.png');
 const out=path.join(root,'artifacts',`pipeline-${label}`);await mkdir(out,{recursive:true});
 const report={schema:1,browser,started:new Date().toISOString(),checks:[],network:[],blocked:[],source:fixture,usesGroundTruth:false};
 let local;const localEnabled=process.env.TEST_LOCAL_FALLBACK==='real';
 if(localEnabled){local=createServer(async(q,r)=>{r.setHeader('Access-Control-Allow-Origin','*');r.setHeader('Access-Control-Allow-Headers','Content-Type');if(q.method==='OPTIONS'){r.end();return;}const parts=[];for await(const p of q)parts.push(p);const body=JSON.parse(Buffer.concat(parts)),child=spawn('python',[path.join(root,'backend/native_pipe.py')],{cwd:root,stdio:['pipe','pipe','pipe'],env:{...process.env,PYTHONIOENCODING:'utf-8'}});let output='',error='';child.stdout.on('data',b=>output+=b);child.stderr.on('data',b=>error+=b);child.on('close',code=>{r.setHeader('Content-Type','application/json');if(code!==0){r.statusCode=400;r.end(JSON.stringify({error}));return;}const value=JSON.parse(output);r.end(JSON.stringify({backend:value.backend,choices:[{message:{content:value.content}}],ms:value.ms}));});child.stdin.end(JSON.stringify(body));});await new Promise(resolve=>local.listen(0,'127.0.0.1',resolve));}
-const context=await chromium.launchPersistentContext(await testProfile(root,`pipeline-${label}`),{channel:browser,headless:true,args:[`--disable-extensions-except=${ext}`,`--load-extension=${ext}`],viewport:{width:1440,height:1000}});
+let context;
 let page;
 try{
+ context=await launchTestContext(chromium,await testProfile(root,`pipeline-${label}`),{channel:browser,headless:true,args:[`--disable-extensions-except=${ext}`,`--load-extension=${ext}`],viewport:{width:1440,height:1000}});
  const worker=await freshWorker(context),id=worker.url().split('/')[2];page=await context.newPage();
  await page.goto(`chrome-extension://${id}/options.html`);await page.waitForLoadState('networkidle');
  assert.equal(await page.getByLabel('執行方式').inputValue(),'google-web');
@@ -40,4 +41,4 @@ try{
  const requests=report.network.length;await page.getByRole('button',{name:'一鍵翻譯',exact:true}).click();await page.waitForFunction(()=>document.querySelector('.status')?.textContent.includes('已載入完成的譯文'));assert.equal(report.network.length,requests);report.checks.push('repeated completed-page trigger reuses translations without external requests');
  report.status='passed-full-pipeline';report.actualBackends=[...new Set(output.diagnostics.map(d=>d.backend).filter(Boolean))];report.localFallbackEnabled=localEnabled;
 }catch(error){report.status='failed';report.error=String(error);process.exitCode=1;if(page){report.body=await page.locator('body').innerText().catch(()=>null);await page.screenshot({path:path.join(out,'failure.png'),fullPage:true}).catch(()=>{});}}
-finally{await context.close();if(local)await new Promise(resolve=>local.close(resolve));report.finished=new Date().toISOString();await writeFile(path.join(out,'report.json'),JSON.stringify(report,null,2));console.log(JSON.stringify({status:report.status,browser,regions:report.regions,pipelineMs:report.pipelineMs,actualBackends:report.actualBackends,checks:report.checks,error:report.error},null,2));}
+finally{await context?.close();if(local)await new Promise(resolve=>local.close(resolve));report.finished=new Date().toISOString();await writeFile(path.join(out,'report.json'),JSON.stringify(report,null,2));console.log(JSON.stringify({status:report.status,browser,regions:report.regions,pipelineMs:report.pipelineMs,actualBackends:report.actualBackends,checks:report.checks,error:report.error},null,2));}

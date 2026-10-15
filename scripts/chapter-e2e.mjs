@@ -3,7 +3,7 @@ import {readFile,writeFile,mkdir} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
 import path from 'node:path';
 import assert from 'node:assert/strict';
-import {freshWorker,testProfile} from './harness.mjs';
+import {freshWorker,launchTestContext,testProfile} from './harness.mjs';
 const root=fileURLToPath(new URL('../',import.meta.url)),dir=path.join(root,'artifacts/chapter-e2e');await mkdir(dir,{recursive:true});
 const pages=await Promise.all([1,2,3].map(i=>readFile(path.join(root,`artifacts/corpus/pages/page-0${i}.png`))));
 const fault500=process.env.TEST_TRANSIENT_500==='1';
@@ -11,7 +11,7 @@ const report={started:new Date().toISOString(),version:JSON.parse(await readFile
 let context,site;
 try{
  const extension=path.join(root,'.output/chrome-mv3');
- context=await chromium.launchPersistentContext(await testProfile(root,'chapter-e2e'),{channel:'chromium',headless:true,args:[`--disable-extensions-except=${extension}`,`--load-extension=${extension}`],viewport:{width:1440,height:950}});
+ context=await launchTestContext(chromium,await testProfile(root,'chapter-e2e'),{channel:'chromium',headless:true,args:[`--disable-extensions-except=${extension}`,`--load-extension=${extension}`],viewport:{width:1440,height:950}});
  await context.route('https://chapter.test.invalid/**',r=>r.fulfill({contentType:'text/html',body:`<!doctype html><header><img src="https://huggingface.co/chapter-regression/logo.png" width="150"></header><main data-comic-reader>${[1,2,3].map(i=>`<img id="page${i}" loading="lazy" src="https://huggingface.co/chapter-regression/page-0${i}.png" width="600" height="900" style="display:block">`).join('')}</main>`}));
  await context.route('https://huggingface.co/chapter-regression/**',r=>{const i=Number(r.request().url().match(/page-0(\d)/)?.[1]??1)-1;return r.fulfill({contentType:'image/png',headers:{'access-control-allow-origin':'https://unrelated.test.invalid'},body:pages[i]});});
  await context.route('https://translate.googleapis.com/**',r=>{report.translationRequests++;if(fault500&&report.translationRequests===1){report.explicitHttp500++;return r.fulfill({status:500,body:'transient server fixture'});}return r.fulfill({contentType:'application/json',body:JSON.stringify([[['今天的故事，讀成繁體中文。',null,null,null]],null,'ja'])});});

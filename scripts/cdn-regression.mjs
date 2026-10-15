@@ -3,14 +3,14 @@ import {readFile,writeFile,mkdir} from 'node:fs/promises';
 import assert from 'node:assert/strict';
 import {fileURLToPath} from 'node:url';
 import path from 'node:path';
-import {freshWorker,testProfile} from './harness.mjs';
+import {freshWorker,launchTestContext,testProfile} from './harness.mjs';
 const root=fileURLToPath(new URL('../',import.meta.url));
 const directory=path.join(root,'artifacts/cdn-regression');await mkdir(directory,{recursive:true});
 const fixture=await readFile(path.join(root,'artifacts/corpus/pages/page-01.png'));
 const report={started:new Date().toISOString(),scope:'isolated regression; permission-missing/grant fixture for an already granted host, fake HTTPS reader and image, actual detector/OCR; translation fixture',checks:[],errors:[]};
 let context,site;
 try{
- context=await chromium.launchPersistentContext(await testProfile(root,'cdn-regression'),{channel:'chromium',headless:true,args:[`--disable-extensions-except=${path.join(root,'.output/chrome-mv3')}`,`--load-extension=${path.join(root,'.output/chrome-mv3')}`],viewport:{width:1440,height:1000}});
+ context=await launchTestContext(chromium,await testProfile(root,'cdn-regression'),{channel:'chromium',headless:true,args:[`--disable-extensions-except=${path.join(root,'.output/chrome-mv3')}`,`--load-extension=${path.join(root,'.output/chrome-mv3')}`],viewport:{width:1440,height:1000}});
  await context.route('https://reader.test.invalid/**',async route=>route.fulfill({contentType:'text/html',body:`<!doctype html><form action="/404"><img id="comic" src="https://huggingface.co/comic-regression.png" width="600"></form><script>document.addEventListener('click',e=>{if(e.target.tagName==='BUTTON'){location.href='/404'}});</script>`}));
  await context.route('https://huggingface.co/comic-regression.png',async route=>route.fulfill({contentType:'image/png',headers:{'access-control-allow-origin':'https://unrelated.test.invalid'},body:fixture}));
  await context.route('https://translate.googleapis.com/**',async route=>route.fulfill({contentType:'application/json',body:JSON.stringify([[['今天天氣真好。',null,null,null]],null,'ja'])}));

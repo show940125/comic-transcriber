@@ -109,7 +109,7 @@ export default defineContentScript({
         const response=await extensionCall(()=>chrome.runtime.sendMessage({channel:'gemini-refine',id,pages:input,settings:conf}));assertChapter();
         if(!response?.ok)throw new Error(response?.error??'整章校正未回應；保留 Google 初譯');
         if(response.result.fingerprint!==fingerprint)throw new Error('整章校正輸入指紋不一致');
-        const latest=await settings();if(JSON.stringify([latest.backend,latest.title,latest.chapter,latest.glossary])!==JSON.stringify([conf.backend,conf.title,conf.chapter,conf.glossary]))throw new Error('翻譯設定或術語已變更，舊校正結果不套用');
+        const latest=await settings();if(latest.backend!==conf.backend||await refinementContext(latest)!==contextKey)throw new Error('翻譯設定、上下文或專屬指示已變更，舊校正結果不套用');
         await refreshDrafts();assertChapter();
         const output=checkedRefinement(currentPages(),snapshot,response.result);
         // Validate the entire response before changing any displayed page.

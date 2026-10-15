@@ -16,6 +16,9 @@ jobs:
         with:
           node-version: 24
           cache: npm
+      - uses: actions/setup-python@v6
+        with:
+          python-version-file: .python-version
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
