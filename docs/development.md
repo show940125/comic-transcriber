@@ -43,7 +43,15 @@ python scripts/verify-delivery.py
 | WebLLM | 初次下載模型權重；翻譯在本機執行 | WebGPU |
 | 本機翻譯／OCR 服務 | 對白文字／圖片及區域資料 | 設定的 loopback 服務 |
 
-網站與圖片 CDN 分別授權。OpenAI-compatible 與 OCR 備援端點僅接受 localhost／127.0.0.1 等 loopback 地址，備援需在設定中啟用。
+0.1.13 起預設宣告所有 HTTP／HTTPS 網站與圖片 CDN 的存取權；自動翻譯仍依明確勾選的網站執行。OpenAI-compatible 與 OCR 備援端點僅接受 localhost／127.0.0.1 等 loopback 地址，備援需在設定中啟用。
+
+### 本機檔案與校正匯入
+
+網站上的 `Reader` 只開啟獨立分頁，不建立 file input。只有擴充套件頂層工作台能選取本機圖片；舊 iframe 入口也使用此限制。`entrypoints/correction-import/` 在獨立分頁讀取 JSON，沿用 `importCorrection` 核對 2 MB、圖片雜湊、尺寸、區域數量、ID 與欄位，使用者確認後只傳白名單 Region。幾何欄位亦逐項重建，額外的巢狀欄位不會被帶回網站。
+
+`src/correction-import.ts` 在背景記憶體管理 10 分鐘工作階段，綁定來源 tab／frame／document／網址、工作台 ID、圖片雜湊及尺寸與匯入 tab／精確網址。交付使用 runtime 訊息；接收端再次驗證資料、原圖元素與工作台存活狀態，完成保存及重排後回覆。成功即消耗工作階段，失敗或回覆未知禁止重送。關閉、換圖、導覽與背景重啟採失效處理。
+
+獨立工作台以 `contentSignature(settings, 'private')` 包裝既有 model key，`sessionData` 持續保留此識別。公開工作台的 key 與儲存 schema 維持原狀；新私人校正不會透過相同圖片雜湊的網站快取讀回。舊共用資料無法判定來源，保留原狀並由使用者管理，獨立工作台不自動沿用。安全界線與回歸方式見 [安全邊界](security.md)。
 
 ### GPU 探測與字形白底
 

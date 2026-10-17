@@ -10,8 +10,10 @@
   import { publicImageUrl } from './core';
   import {detectSession,ocrSession,translateSession,processSession,saveSession,encodeSession,sessionData,type PageSession} from './page-pipeline';
   import {extensionCall,detached} from './extension-context';
-  let { siteInput, onSiteApply, onSiteError, onSiteSummary, onSiteProgress, onSiteBusy, onSiteReview }: {
+  import {correctionRegions,type CorrectionBinding} from './correction-import';
+  let { siteInput, siteTargetCurrent, onSiteApply, onSiteError, onSiteSummary, onSiteProgress, onSiteBusy, onSiteReview }: {
     siteInput?: {base64?:string; mime?:string; imageUrl?:string; auto?:boolean; priorSummary?:string;sourcePageUrl?:string;pageIndex?:number;pageData?:PageData};
+    siteTargetCurrent?:()=>boolean;
     onSiteApply?: (bytes:Uint8Array<ArrayBuffer>,page?:PageData)=>void;
     onSiteError?: (error:string)=>void;
     onSiteSummary?: (summary:string)=>void;
@@ -30,6 +32,18 @@
   let fontReady = $state(false), imageUrl = '', signature = '';
   let remoteImageUrl = $state(''), permissionOrigin = $state('');
   let metadata:PageSession['metadata'];
+  const privateFiles=$derived(!siteInput&&parent===window&&location.protocol==='chrome-extension:'&&location.host===chrome.runtime.id);
+  const editorId=crypto.randomUUID();let importActive=true,importBinding:CorrectionBinding|undefined;
+  const deliveredImports=new Set<string>();
+  function invalidatePendingImport(){importBinding=undefined;if(siteInput)detached(()=>chrome.runtime.sendMessage({channel:'correction-import-invalidate',editorId}));}
+  export function retireImport(){importActive=false;invalidatePendingImport();}
+  function currentImport(binding:CorrectionBinding){return alive&&importActive&&!busy&&!!siteInput&&siteTargetCurrent?.()===true&&importBinding?.hash===binding.hash&&binding.editorId===editorId&&hash===binding.hash&&image?.naturalWidth===binding.width&&image.naturalHeight===binding.height;}
+  function openPrivateReader(event:MouseEvent){if(event.isTrusted)detached(()=>chrome.runtime.sendMessage({channel:'open-private-reader'}),e=>{error=String(e);});}
+  async function openCorrectionImport(event:MouseEvent){
+    if(!event.isTrusted||!image||busy||!importActive||!siteTargetCurrent?.())return;
+    importBinding={editorId,hash,width:image.naturalWidth,height:image.naturalHeight};
+    try{const result=await extensionCall(()=>chrome.runtime.sendMessage({channel:'correction-import-open',binding:importBinding}));if(!result?.ok)throw Error(result?.error??'校正匯入未回應');}catch(e){error=String(e);}
+  }
   async function loadRemote() {
     if (!remoteImageUrl) return;
     const response = await extensionCall(()=>chrome.runtime.sendMessage({ channel:'fetch-image', url:remoteImageUrl }));
@@ -67,21 +81,22 @@
   }
   function session():PageSession {
     if(!blob||!image)throw new Error('請先載入圖片');
-    return {blob,image,regions:$state.snapshot(regions),hash,modelKey:signature,config:$state.snapshot(config),metadata};
+    return {blob,image,regions:$state.snapshot(regions),hash,modelKey:signature,config:$state.snapshot(config),cacheScope:privateFiles?'private':undefined,metadata};
   }
   const hooks=()=>({progress,signal:aborter?.signal,partial:(value:Region[])=>{if(alive){regions=value;paint();}}});
   async function runStage(work:(page:PageSession)=>Promise<void>){const page=session();try{await work(page);}finally{if(alive){regions=page.regions;signature=page.modelKey;}}}
   async function save() {if(image&&hash)await saveSession(session());}
   async function load(input: Blob, name = 'comic') {
+    invalidatePendingImport();
     if (input.size > 20 * 1024 * 1024 || !input.type.startsWith('image/')) throw new Error('請使用 20 MB 以內的圖片');
     if (imageUrl) URL.revokeObjectURL(imageUrl);
     imageUrl = URL.createObjectURL(input); const next = new Image(); next.src = imageUrl; await next.decode();
     if (next.naturalWidth * next.naturalHeight > 30_000_000) throw new Error('圖片超過 3000 萬像素，請先裁切');
-    image = next; blob = input; filename = name; hash = await hashBlob(input); signature = contentSignature(config);
+    image = next; blob = input; filename = name; hash = await hashBlob(input); signature = contentSignature(config,privateFiles?'private':undefined);
     const supplied=siteInput?.pageData;
     let cached=await loadPage(hash,signature);
     if(supplied?.hash===hash&&supplied.width===image.naturalWidth&&supplied.height===image.naturalHeight){cached=await loadPage(hash,supplied.modelKey)??supplied;}
-    if(cached){let direct=false;try{direct=JSON.parse(cached.modelKey)[1]==='gemini-web';}catch{}if(direct){config.backend='gemini-web';config.priorSummary=(await readSettings()).priorSummary;signature=contentSignature(config);}}
+    if(cached){let direct=false;try{const key=JSON.parse(cached.modelKey);direct=(key[0]==='private-reader-v1'?JSON.parse(key[1]):key)[1]==='gemini-web';}catch{}if(direct){config.backend='gemini-web';config.priorSummary=(await readSettings()).priorSummary;signature=contentSignature(config,privateFiles?'private':undefined);}}
     regions = (cached?.regions??[]).map(r=>({...r,bubbleBox:r.bubbleBox??(r.kind==='bubble'?r.ocrBox:undefined),ocrDone:r.ocrDone??(!!r.source.trim()||r.warnings.some(w=>/疑似無文字|缺少日文字元/.test(w)))})); selected = ''; original = false;
     metadata={sourcePageUrl:siteInput?.sourcePageUrl??cached?.sourcePageUrl,imageUrl:siteInput?.imageUrl??cached?.imageUrl,pageIndex:siteInput?.pageIndex??cached?.pageIndex,refinement:cached?.refinement};
     message = cached ? '已載入圖片與先前校正' : '圖片已載入，按「偵測文字框」或手動框選'; stage = cached ? 'complete' : 'idle'; paint();
@@ -150,11 +165,25 @@
       void action(async () => { if (event.data.auto && typeof event.data.priorSummary === 'string') config.priorSummary = event.data.priorSummary; await load(new Blob([bytes], { type: event.data.mime }), 'web-comic'); if (event.data.auto) { await translatePage(); await applyToPage(); } });
     };
     addEventListener('message', receive);
-    const stop = () => {aborter?.abort();disposeChromeTranslator();}; addEventListener('pagehide', stop);
+    const receiveImport=(request:any,sender:chrome.runtime.MessageSender,reply:(value:any)=>void)=>{
+      if(request?.channel!=='correction-import-deliver'||request.binding?.editorId!==editorId)return;
+      const binding=request.binding as CorrectionBinding;
+      if(sender.id!==chrome.runtime.id||sender.tab||request.sourceUrl!==location.href||!currentImport(binding)||deliveredImports.has(request.id)){reply({ok:false,error:'原工作台或圖片已變更，拒絕套用校正'});return;}
+      let checked:Region[];try{checked=correctionRegions(request.regions,binding);}catch(e){reply({ok:false,error:String(e)});return;}
+      deliveredImports.add(request.id);busy=true;onSiteBusy?.(true);
+      void (async()=>{
+        if(!alive||!importActive||!siteTargetCurrent?.()||hash!==binding.hash)throw Error('原工作台已失效');
+        await saveSession({...session(),regions:checked});
+        if(!alive||!importActive||!siteTargetCurrent?.()||hash!==binding.hash)throw Error('原工作台已失效；已存校正不重送');
+        regions=checked;selected=regions[0]?.id??'';paint();message='校正已從獨立分頁匯入';importBinding=undefined;return {ok:true};
+      })().then(reply,e=>{error=String(e);reply({ok:false,error});}).finally(()=>{busy=false;if(alive)onSiteBusy?.(false);});return true;
+    };
+    if(siteInput)chrome.runtime.onMessage.addListener(receiveImport);
+    const stop = () => {retireImport();aborter?.abort();disposeChromeTranslator();}; addEventListener('pagehide', stop);
     detached(async () => { config = await readSettings(); if (token && parent !== window) { const authority = await extensionCall(()=>chrome.runtime.sendMessage({ channel: 'frame-authority', token })); if (authority?.ok) allowedOrigin = authority.origin; else { error = '未授權的嵌入工作台，請從墨譯按鈕開啟'; return; } } try { await loadFont(!!siteInput); fontReady = true; } catch { error = '繁中字型載入失敗，暫用系統字型'; } if (allowedOrigin) parent.postMessage({ channel: 'comic-ready', token }, allowedOrigin);
       if(alive&&siteInput)void action(async()=>{if(siteInput.priorSummary)config.priorSummary=siteInput.priorSummary;if(siteInput.imageUrl){remoteImageUrl=publicImageUrl(siteInput.imageUrl).href;await loadRemote();}else if(siteInput.base64)await load(new Blob([imageBytes(siteInput.base64)],{type:siteInput.mime}),'web-comic');if(siteInput.auto){await translatePage();await applyToPage();}});
     },e=>{error=String(e);});
-    return () => { alive=false;stop(); removeEventListener('pagehide', stop); removeEventListener('message', receive); if (imageUrl) URL.revokeObjectURL(imageUrl); };
+    return () => { alive=false;stop();if(siteInput)detached(()=>chrome.runtime.onMessage.removeListener(receiveImport));removeEventListener('pagehide', stop); removeEventListener('message', receive); if (imageUrl) URL.revokeObjectURL(imageUrl); };
   });
 </script>
 
@@ -162,14 +191,17 @@
 <main>
   <header><div><span class="eyebrow">LOCAL COMIC STUDIO</span><h1>墨譯<span>漫畫工作台</span></h1></div>{#if siteInput}<button onclick={()=>detached(()=>chrome.runtime.sendMessage({channel:'open-options'}),e=>{error=String(e);})}>模型與閱讀設定 ↗</button>{:else}<a href="options.html" target="_blank">模型與閱讀設定 ↗</a>{/if}</header>
   <section class="toolbar" aria-label="操作工具">
-    <label class="file">選擇圖片<input type="file" accept="image/*" disabled={busy} onchange={e => { const file = e.currentTarget.files?.[0]; if (file) void action(() => load(file, file.name.replace(/\.[^.]+$/, ''))); }} /></label>
+    {#if privateFiles}<label class="file">選擇圖片<input type="file" accept="image/*" disabled={busy} onchange={e => { const file = e.currentTarget.files?.[0]; if (file) void action(() => load(file, file.name.replace(/\.[^.]+$/, ''))); }} /></label>
+    {:else}<button disabled={busy} onclick={openPrivateReader}>選擇本機圖片（獨立工作台）</button>{/if}
     <button class="primary" disabled={!image || busy} onclick={() => action(translatePage)}>一鍵翻譯</button>
     <button disabled={!image || busy} onclick={() => action(detect)}>1 偵測文字框</button>
     <button disabled={!regions.length || busy} onclick={() => action(ocr)}>2 辨識日文</button>
     <button class="primary" disabled={!regions.length || busy} onclick={() => action(translate)}>3 翻譯繁中</button>
     <button disabled={!image || busy} class:chosen={drawing} onclick={() => drawing = !drawing}>手動框選</button>
     <button disabled={!image} onclick={() => { original = !original; paint(); }}>{original ? '顯示譯文' : '切回原圖'}</button>
-    <label class="file">載入校正<input aria-label="載入校正 JSON" type="file" accept="application/json,.json" disabled={!image || busy} onchange={e => { const file=e.currentTarget.files?.[0];if(file&&image)void action(async()=>{if(file.size>2*1024*1024)throw new Error('校正檔超過 2 MB');regions=importCorrection(JSON.parse(await file.text()),hash,image!.naturalWidth,image!.naturalHeight);selected=regions[0]?.id??'';await save();message='校正已載入';}); }} /></label>
+    {#if privateFiles}<label class="file">載入校正<input aria-label="載入校正 JSON" type="file" accept="application/json,.json" disabled={!image || busy} onchange={e => { const file=e.currentTarget.files?.[0];if(file&&image)void action(async()=>{if(file.size>2*1024*1024)throw new Error('校正檔超過 2 MB');regions=importCorrection(JSON.parse(await file.text()),hash,image!.naturalWidth,image!.naturalHeight);selected=regions[0]?.id??'';await save();message='校正已載入';}); }} /></label>
+    {:else if siteInput}<button disabled={!image||busy} onclick={openCorrectionImport}>載入校正（獨立分頁）</button>
+    {:else}<button onclick={openPrivateReader}>在獨立工作台載入校正</button>{/if}
     {#if busy}<button onclick={() => aborter?.abort()}>取消</button>{/if}
   </section>
   <div class="status" aria-live="polite"><span class:working={busy} class="dot"></span>{message}<small>{backend} · {fontReady ? '繁中字型就緒' : '字型載入中'}</small></div>

@@ -10,6 +10,7 @@ import {geminiOrigin} from '../src/gemini-web';
 import {geminiProtocolPassed} from '../src/gemini-validation';
 import {waitForOffscreenReady} from '../src/offscreen-ready';
 import {specificSites} from '../src/site-access';
+import {installCorrectionImports} from '../src/correction-import';
 export default defineBackground(() => {
   let creating: Promise<void> | undefined;
   let closing:Promise<void>|undefined,maintenance=false,releaseRequested=false,geminiValidationRunning=false;
@@ -47,6 +48,7 @@ export default defineBackground(() => {
   });
   chrome.runtime.onMessage.addListener((message, sender, reply) => {
     if (sender.id !== chrome.runtime.id) return;
+    if(message.channel==='open-private-reader'){chrome.tabs.create({url:chrome.runtime.getURL('/reader.html')}).then(()=>reply({ok:true}),e=>reply({ok:false,error:String(e)}));return true;}
     if(message.channel==='runtime-heartbeat'){reply({ok:true});return;}
     if(message.channel==='gemini-status'){
       (async()=>{const {geminiValidation,geminiValidationProgress}=await chrome.storage.local.get(['geminiValidation','geminiValidationProgress']),permission=await chrome.permissions.contains({origins:[geminiOrigin]}),protocolPassed=geminiProtocolPassed(geminiValidation,geminiValidationProgress);return {ok:true,result:{ready:permission&&protocolPassed,permission,protocolPassed}};})().then(reply,e=>reply({ok:false,error:String(e)}));return true;
@@ -195,4 +197,5 @@ export default defineBackground(() => {
       task().then(reply, error => reply({ ok: false, error: String(error) })); return true;
     }
   });
+  installCorrectionImports();
 });

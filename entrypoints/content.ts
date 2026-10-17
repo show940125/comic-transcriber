@@ -135,6 +135,7 @@ export default defineContentScript({
       }finally{controller.removeEventListener('abort',cancel);if(contextAlive()){detached(()=>chrome.runtime.onMessage.removeListener(listener));detached(()=>chrome.runtime.sendMessage({channel:'image-slot-release',id}));}if(runAbort===localAbort)runAbort=undefined;}
     }
     async function open(image: HTMLImageElement, auto = false, report?:(diagnostic:Diagnostic)=>void) {
+      const editorUrl=location.href;
       const {default:Reader}=await import('../src/Reader.svelte');
       if(!auto&&batchRunning)return;
       delete image.dataset.comicError;
@@ -144,6 +145,7 @@ export default defineContentScript({
       if (key !== chapterKey) { priorSummary = conf.priorSummary; chapterKey = key; }
       if(!auto)closeDialog?.();
       const holder=document.createElement('div');holder.setAttribute('data-comic-studio','');
+      let targetSrc=image.src,targetSrcset=image.srcset;
       holder.style.cssText=auto?'display:none':'position:fixed;inset:20px;z-index:2147483647;background:#f1eee6;box-shadow:0 0 0 30px #0008;border-radius:12px;overflow:auto;';
       const shadow=holder.attachShadow({mode:'open'}), container=document.createElement('div');
       container.style.cssText='background:#f1eee6;color:#25362f;font:14px "Microsoft JhengHei",sans-serif;padding-top:24px;';
@@ -163,10 +165,10 @@ export default defineContentScript({
       (document.body??document.documentElement).append(holder);if(!auto)dialog=holder;
       return new Promise<void>(resolve => {
         let closed=false;
-        const close=()=>{if(closed)return;closed=true;void unmount(component).catch(()=>{});holder.remove();if(dialog===holder){dialog=undefined;closeDialog=undefined;}resolve();};
-        const component=mount(Reader,{target:container,props:{siteInput:{...input,auto,priorSummary,pageData:chapterDrafts.get(image),sourcePageUrl:location.href,pageIndex:Math.max(0,chapterImages().indexOf(image))},onSiteProgress:report,onSiteBusy:busy=>{for(const control of pager.querySelectorAll('button,select'))(control as HTMLButtonElement).disabled=busy||(control as HTMLElement).dataset.outside==='true';},onSiteReview:count=>{image.dataset.comicReview=String(count);},onSiteSummary:summary=>{if(auto)priorSummary=summary;},onSiteApply:(data,page)=>{
+        const close=()=>{if(closed)return;closed=true;component.retireImport();void unmount(component).catch(()=>{});holder.remove();if(dialog===holder){dialog=undefined;closeDialog=undefined;}resolve();};
+        const component=mount(Reader,{target:container,props:{siteTargetCurrent:()=>!closed&&live&&holder.isConnected&&image.isConnected&&image.src===targetSrc&&image.srcset===targetSrcset&&location.href===editorUrl&&(original.get(image)??imageSource(image))===source,siteInput:{...input,auto,priorSummary,pageData:chapterDrafts.get(image),sourcePageUrl:location.href,pageIndex:Math.max(0,chapterImages().indexOf(image))},onSiteProgress:report,onSiteBusy:busy=>{for(const control of pager.querySelectorAll('button,select'))(control as HTMLButtonElement).disabled=busy||(control as HTMLElement).dataset.outside==='true';},onSiteReview:count=>{image.dataset.comicReview=String(count);},onSiteSummary:summary=>{if(auto)priorSummary=summary;},onSiteApply:(data,page)=>{
             if(closed||!live||!image.isConnected||(original.get(image)??imageSource(image))!==source)throw new Error('工作台目標圖片已變更，請重新開啟');
-            if(page)chapterDrafts.set(image,page);applyImage(image,data,page);
+            if(page)chapterDrafts.set(image,page);applyImage(image,data,page);targetSrc=image.src;targetSrcset=image.srcset;
             if(auto)close();
           },onSiteError:error=>{image.dataset.comicError=error;if(auto)close();}}});
         if(!auto){const button=document.createElement('button');button.type='button';button.textContent='關閉工作台';button.style.cssText='position:absolute;right:15px;top:5px;z-index:2;font:14px sans-serif;padding:6px 10px;cursor:pointer';button.onclick=close;shadow.append(button);closeDialog=close;}

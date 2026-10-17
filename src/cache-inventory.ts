@@ -11,7 +11,7 @@ export async function responseBytes(response:Response,signal?:AbortSignal){
 }
 export async function inventory(){
   const data=await chrome.storage.local.get(null),keys=Object.keys(data).filter(k=>k.startsWith('page:'));
-  const pages=await Promise.all(keys.map(async key=>{const p=(data[key]&&typeof data[key]==='object'?data[key]:{}) as Partial<PageData>;return {key,hash:p.hash,title:p.title,chapter:p.chapter,regions:Array.isArray(p.regions)?p.regions.length:0,source:p.sourcePageUrl,pageIndex:p.pageIndex,savedAt:p.savedAt,bytes:await chrome.storage.local.getBytesInUse(key),backend:(()=>{try{return JSON.parse(p.modelKey??'')[1];}catch{return '未記錄';}})()};}));
+  const pages=await Promise.all(keys.map(async key=>{const p=(data[key]&&typeof data[key]==='object'?data[key]:{}) as Partial<PageData>;return {key,hash:p.hash,title:p.title,chapter:p.chapter,regions:Array.isArray(p.regions)?p.regions.length:0,source:p.sourcePageUrl,pageIndex:p.pageIndex,savedAt:p.savedAt,bytes:await chrome.storage.local.getBytesInUse(key),backend:(()=>{try{const parsed=JSON.parse(p.modelKey??'');return parsed[0]==='private-reader-v1'?'獨立工作台 · '+JSON.parse(parsed[1])[1]:parsed[1];}catch{return '未記錄';}})()};}));
   const index=(data.cacheSizeIndex??{}) as Record<string,CacheRecord>,models=[];
   for(const name of (await caches.keys()).filter(ownedCache)){const cache=await caches.open(name);for(const request of await cache.keys()){const record=index[recordKey(name,request.url)];models.push({cache:name,url:request.url,...modelGroup(name,request.url),bytes:record?.bytes,measuredAt:record?.measuredAt,verified:record?.verified});}}
   const estimate=await navigator.storage?.estimate?.().catch(()=>undefined);

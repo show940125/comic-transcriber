@@ -7,7 +7,7 @@ import {googleWebTranslate} from './google-web';
 import {extensionCall,detached,contextAlive} from './extension-context';
 import {renderPage,loadFont} from './render';
 import {SerialLane,DeferredTranslationError} from './scheduling';
-export interface PageSession {blob:Blob;image:HTMLImageElement;regions:Region[];hash:string;modelKey:string;config:Settings;metadata?:Pick<PageData,'sourcePageUrl'|'imageUrl'|'pageIndex'|'refinement'>}
+export interface PageSession {blob:Blob;image:HTMLImageElement;regions:Region[];hash:string;modelKey:string;config:Settings;cacheScope?:'private';metadata?:Pick<PageData,'sourcePageUrl'|'imageUrl'|'pageIndex'|'refinement'>}
 export interface PageHooks {progress?:(d:Diagnostic)=>void;partial?:(regions:Region[])=>void;beforeTranslate?:()=>Promise<void>;canTranslate?:()=>boolean;onFailure?:(error:unknown)=>void;signal?:AbortSignal;ocrOnly?:boolean}
 const translationLane=new SerialLane();
 export async function loadSession(blob:Blob,config:Settings,signal?:AbortSignal):Promise<PageSession&{dispose:()=>void}>{
@@ -19,7 +19,7 @@ export async function loadSession(blob:Blob,config:Settings,signal?:AbortSignal)
   }catch(error){URL.revokeObjectURL(url);throw error;}
 }
 export function sessionData(session:PageSession):PageData{
-  const {image,config}=session;session.modelKey=contentSignature(config);
+  const {image,config}=session;session.modelKey=contentSignature(config,session.cacheScope);
   const page:PageData={schema:1,hash:session.hash,width:image.naturalWidth,height:image.naturalHeight,regions:structuredClone(session.regions),title:config.title,chapter:config.chapter,glossary:config.glossary,summary:session.regions.filter(r=>r.translation).map(r=>r.translation).join('\n').slice(0,1500),modelKey:session.modelKey};
   Object.assign(page,session.metadata,{savedAt:Date.now()});return page;
 }
