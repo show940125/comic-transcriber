@@ -30,7 +30,17 @@ python scripts/verify-delivery.py
 
 這組命令接在 `npm run build` 後執行。下載程式核對權重雜湊，stage 程式將 detector 與 Manga-OCR 放入 `.output/chrome-mv3/models`；重新建置會移除 staged 權重，需再次 stage。ZIP 位於 `dist/`，完整性核對結果寫入本機 `artifacts/`。
 
-離線 OCR 套件約 465 MiB。Google 翻譯仍需網路；完全離線翻譯需先準備 Chrome 語言包、WebLLM 權重或本機模型服務。瀏覽器快取與開發工具下載的模型各自獨立。
+0.1.16 起預設內建約 111.4 MiB 的 INT8 MangaOCR 權重，完整套件另含偵測器、WASM 與字型；最終 ZIP 大小以交付收據為準。全精度模式另行下載。Google 翻譯仍需網路；完全離線翻譯需先準備 Chrome 語言包、WebLLM 權重或本機模型服務。瀏覽器快取與開發工具下載的模型各自獨立。
+
+### OCR 模式與候選校正
+
+預設 INT8 使用一般 greedy decoder；全精度模式使用已驗證的 KV decoder。INT8 encoder 搭配浮點或量化 KV 的組合未達本輪速度門檻，保留為研究候選。設定頁選擇模式後，下載按鈕只準備該模式與偵測器。開發工具可用 `python scripts/download-vision.py --profile fp32` 取得全精度模式；既有 Python 服務需要一般全精度 decoder 時使用 `--profile all`。
+
+WASM 自動使用 CPU 邏輯執行緒數的一半，最多 4 緒、至少 1 緒；缺少跨來源隔離或 SharedArrayBuffer 時使用 1 緒。設定可明確指定 1／2／4；實際 pthread 與降級原因在資源管理頁查閱。模型與後端切換沿用單 Worker 佇列，等待既有工作完成後釋放前一套 OCR session；閒置 60 秒後釋放整個推論文件。
+
+工作台選取文字框後可只重辨該框、使用另一模式比較，再選擇候選套用。原裁圖、目前原文與最多兩份候選並列；另一模式第一次使用可能需要下載模型，介面顯示大小。偵測分數與 OCR 信心各別標示，沒有辨識信心時顯示未提供。畫線拆框先預覽方向與子框，套用後可撤銷；新子框需重新辨識。
+
+每份候選保存權重／decoder／前處理身分與實際後端；套用不同原文只清除該框舊譯文及章節校正指紋。舊版結果須從 legacy 入口明確載入，保留原身分；採用新 OCR 後使用新快取身分。校正 JSON 維持 schema 1，可選候選欄位經白名單重建，最多兩份；私人 Reader 與網站工作台隔離規則維持。
 
 ## 資料流
 

@@ -2,13 +2,15 @@ import * as ort from 'onnxruntime-web/webgpu';
 import { CreateMLCEngine, type MLCEngine } from '@mlc-ai/web-llm';
 import lock from './model-lock.json';
 import { detectorBox, localUrl, parseTranslations, prompt, readingOrder, iou } from './core';
-import type { Diagnostic, EngineRequest, Region, Settings } from './types';
+import type { Diagnostic, EngineRequest, Region, Settings,OcrCandidate,OcrProfile } from './types';
 import { bubbleRegions } from './detection';
 import { traditional } from './language';
 import { needsOcrReview, ocrReviewWarning } from './ocr-quality';
 import { imageBase64 } from './binary';
 import { createGpuProbe } from './gpu';
 import {resolveThreads} from './idle-runtime';
+import {ocrSpec,ocrFiles,ocrIdentity} from './ocr-models';
+import {decodeManga} from './manga-decode';
 let runtimeConfigured=false,threadInfo=resolveThreads('auto',globalThis.crossOriginIsolated,typeof SharedArrayBuffer!=='undefined'),pthreadCount=0;
 const PlatformWorker=globalThis.Worker;
 if(PlatformWorker)globalThis.Worker=class extends PlatformWorker{constructor(url:string|URL,options?:WorkerOptions){super(url,options);if(options?.name==='em-pthread')pthreadCount++;}};
@@ -16,8 +18,8 @@ let base = '', current = '';
 let tail: Promise<unknown> = Promise.resolve();
 const aborts = new Map<string, AbortController>();
 const sessions = new Map<string, { session: ort.InferenceSession; backend: string; bytes: ArrayBuffer }>();
-const runtimeInfo=()=>({...threadInfo,crossOriginIsolated:globalThis.crossOriginIsolated,sharedArrayBuffer:typeof SharedArrayBuffer!=='undefined',spawnedPthreads:pthreadCount,effectiveThreads:ort.env.wasm.numThreads,models:sessions.size+(llm?1:0),llmLoaded:!!llm});
-let llm: MLCEngine | undefined, loadedId = '', vocab: string[] = [];
+const runtimeInfo=()=>({...threadInfo,crossOriginIsolated:globalThis.crossOriginIsolated,sharedArrayBuffer:typeof SharedArrayBuffer!=='undefined',spawnedPthreads:pthreadCount,effectiveThreads:ort.env.wasm.numThreads,models:sessions.size+(llm?1:0),modelFiles:[...sessions.keys()],ocrProfile:activeOcr,llmLoaded:!!llm});
+let llm: MLCEngine | undefined, loadedId = '', vocab: string[] = [],activeOcr='',activeOcrProvider='';
 const report = (d: Diagnostic) => postMessage({ type: 'progress', id: current, diagnostic: d });
 function check(signal: AbortSignal) { signal.throwIfAborted(); }
 const capability = createGpuProbe(() => navigator.gpu);
@@ -26,10 +28,11 @@ async function artifact(model: string, name: string, signal: AbortSignal): Promi
   const cache = await caches.open('comic-vision-v1');
   let response = await cache.match(spec.url);
   if (!response) {
-    report({ stage: 'loading', message: `下載 ${name}（${Math.round(spec.bytes / 1048576)} MB）`, model });
+    report({ stage: 'loading', message: `準備 ${name}（${Math.round(spec.bytes / 1048576)} MB）`, model });
     // Optional offline distribution can carry weights inside the extension.
     const local = await fetch(`${base}models/${model}/${name}`, { signal }).catch(() => null);
-    response = local?.ok ? local : await fetch(spec.url, { signal, credentials: 'omit' });
+    if(local?.ok)response=local;
+    else{report({stage:'loading',message:`下載 ${name}（${Math.round(spec.bytes/1048576)} MB）`,model});response=await fetch(spec.url,{signal,credentials:'omit'});}
     if (!response.ok) throw new Error(`模型下載失敗：${name} (${response.status})`);
     const bytes = await response.arrayBuffer();
     const digest = await crypto.subtle.digest('SHA-256', bytes);
@@ -53,6 +56,7 @@ async function session(model: string, name: string, signal: AbortSignal, wasmOnl
   ort.env.wasm.numThreads = threadInfo.threads;
   let backend = model === 'detector' || wasmOnly ? 'wasm' : (await capability()).available ? 'webgpu+wasm' : 'wasm';
   let instance: ort.InferenceSession;
+  report({stage:'loading',message:`初始化 ${name}`,model,backend});
   try { instance = await ort.InferenceSession.create(bytes, { executionProviders: backend === 'wasm' ? ['wasm'] : ['webgpu', 'wasm'] }); }
   catch (error) {
     if (backend === 'wasm') throw error;
@@ -66,6 +70,7 @@ async function run(value: Awaited<ReturnType<typeof session>>, feeds: Record<str
   try { return await value.session.run(feeds); }
   catch (error) {
     if (value.backend === 'wasm') throw error;
+    check(signal);
     await value.session.release(); value.backend = 'wasm';
     value.session = await ort.InferenceSession.create(value.bytes, { executionProviders: ['wasm'] });
     report({ stage: 'loading', message: 'GPU 執行失敗，已降級 WASM', backend: 'wasm' });
@@ -111,38 +116,34 @@ async function detect(request: Extract<EngineRequest, { op: 'detect' }>, signal:
 async function recognize(request: Extract<EngineRequest, { op: 'ocr' }>, signal: AbortSignal): Promise<Region[]> {
   const bitmap = await createImageBitmap(request.image), started = performance.now();
   try {
-    const encoder = await session('manga-ocr', 'encoder_model.onnx', signal, request.provider === 'wasm'), decoder = await session('manga-ocr', 'decoder_model.onnx', signal, request.provider === 'wasm');
-    if (!vocab.length) vocab = new TextDecoder().decode(await artifact('manga-ocr', 'vocab.txt', signal)).trimEnd().split(/\r?\n/);
+    const profile:OcrProfile=request.profile==='fp32'?'fp32':'int8',spec=ocrSpec(profile),identity=ocrIdentity(profile);
+    if(activeOcr!==profile||activeOcrProvider!==(request.provider??'auto')){
+      for(const [key,value] of sessions)if(key.startsWith('manga-ocr')){await value.session.release();sessions.delete(key);}
+      vocab=[];activeOcr=profile;activeOcrProvider=request.provider??'auto';
+    }
+    const encoder=await session(spec.encoder.model,spec.encoder.file,signal,request.provider==='wasm');
+    const decoder=await session(spec.decoder.model,spec.decoder.file,signal,request.provider==='wasm');
+    const cross=spec.cross?await session(spec.cross.model,spec.cross.file,signal,request.provider==='wasm'):undefined;
+    if(!vocab.length)vocab=new TextDecoder().decode(await artifact(spec.vocab.model,spec.vocab.file,signal)).trimEnd().split(/\r?\n/);
+    const candidate=(source:string,warnings:string[]):OcrCandidate=>({source,profile,identity,decoder:spec.decode,preprocessing:spec.preprocessing,backend:[encoder.backend,decoder.backend,cross?.backend].filter(Boolean).join('/'),warnings,at:Date.now()});
     const result: Region[] = [];
     for (const region of [...request.regions].sort((a, b) => a.order - b.order)) {
-      check(signal); report({ stage: 'ocr', message: `辨識 ${result.length + 1}/${request.regions.length}`, backend: `${encoder.backend}/${decoder.backend}`, model: 'Manga-OCR' });
+      check(signal); report({ stage: 'ocr', message: `辨識 ${result.length + 1}/${request.regions.length}`, backend: `${encoder.backend}/${decoder.backend}`, model: `MangaOCR ${profile}/${spec.decode}` });
       const crop = pixels(bitmap, 224, region.ocrBox ? { ...region, ...region.ocrBox } : region, true);
       let dark = 0, light = 0;
       for (let i = 0; i < crop.data.length; i += 4) { const v = crop.data[i] * .299 + crop.data[i + 1] * .587 + crop.data[i + 2] * .114; if (v < 100) dark++; if (v > 155) light++; }
-      if (dark < 24 || light < 24) { crop.tensor.dispose(); result.push({ ...region, source: '', translation: '', ocrDone:true, warnings: [...region.warnings, '疑似無文字，已略過；可手動填入原文'] }); continue; }
-      const encoded = await run(encoder, { [encoder.session.inputNames[0]]: crop.tensor }, signal);
-      const hidden = encoded[encoder.session.outputNames[0]], tokens = [2];
-      for (let t = 0; t < 64; t++) {
-        check(signal);
-        const ids = new ort.Tensor('int64', BigInt64Array.from(tokens.map(BigInt)), [1, tokens.length]);
-        const feeds: Record<string, ort.Tensor> = {};
-        for (const name of decoder.session.inputNames) feeds[name] = /encoder|hidden/i.test(name) ? hidden : ids;
-        const output = await run(decoder, feeds, signal), logits = output[decoder.session.outputNames[0]];
-        const size = logits.dims.at(-1)!, start = logits.data.length - size;
-        let index = 0, maximum = -Infinity;
-        for (let i = 0; i < size; i++) if (Number(logits.data[start + i]) > maximum) { maximum = Number(logits.data[start + i]); index = i; }
-        ids.dispose(); Object.values(output).forEach(tensor => tensor.dispose());
-        if (index === 3) break; tokens.push(index);
-      }
+      if (dark < 24 || light < 24) { crop.tensor.dispose(); result.push({ ...region, source: '', translation: '', ocrDone:true, ocr:candidate('',['疑似無文字，已略過；可手動填入原文']), warnings: [...region.warnings, '疑似無文字，已略過；可手動填入原文'] }); continue; }
+      try {
+      const {tokens,ended}=await decodeManga(encoder,decoder,cross,crop.tensor,signal,run);
       const text = tokens.slice(1).filter(t => t >= 5).map(t => vocab[t] ?? '').join('').replace(/##|\[UNK\]/g, '').replace(/\s+/g, '');
       const warnings = [...region.warnings];
       if (!/[\u3040-\u30ff\u3400-\u9fff]/.test(text)) warnings.push('辨識結果缺少日文字元，請覆核');
-      if (tokens.length >= 64) warnings.push('辨識長度到達上限，請拆分文字框');
+      if (!ended) warnings.push('辨識長度到達上限，請拆分文字框');
       const needsReview=needsOcrReview(text);if(needsReview)warnings.push(ocrReviewWarning);
-      result.push({ ...region, source: text, translation:'', needsReview, ocrDone:true, warnings });
-      crop.tensor.dispose(); Object.values(encoded).forEach(t => t.dispose());
+      result.push({ ...region, source: text, translation:'', needsReview, ocrDone:true, warnings,ocr:candidate(text,warnings),ocrCandidates:undefined });
+      } finally {crop.tensor.dispose();}
     }
-    report({ stage: 'ocr', message: 'OCR 完成；請覆核原文', backend: `${encoder.backend}/${decoder.backend}`, model: 'Manga-OCR', ms: performance.now() - started });
+    report({ stage: 'ocr', message: 'OCR 完成；請覆核原文', backend: `${encoder.backend}/${decoder.backend}`, model: `MangaOCR ${profile}/${spec.decode}`, ms: performance.now() - started });
     return result;
   } finally { bitmap.close(); }
 }
@@ -228,7 +229,8 @@ async function handle(request: EngineRequest, signal: AbortSignal) {
     }
     case 'translate': return translate(request, signal);
     case 'prefetch':
-      for (const model of lock.vision) for (const file of model.files) await artifact(model.id, file.name, signal);
+      for(const file of lock.vision.find(m=>m.id==='detector')!.files)await artifact('detector',file.name,signal);
+      for(const ref of ocrFiles(request.profile))await artifact(ref.model,ref.file,signal);
       if (request.modelId) await loadLlm(request.modelId, signal);
       return true;
   }

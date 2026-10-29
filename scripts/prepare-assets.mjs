@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { prebuiltAppConfig } from '@mlc-ai/web-llm';
 const root = new URL('../', import.meta.url);
 let existing={};if(!process.argv.includes('--refresh-lock'))try{existing=JSON.parse(await readFile(new URL('src/model-lock.json',root),'utf8'));}catch{}
+const pinnedOcr=JSON.parse(await readFile(new URL('src/model-lock.json',root),'utf8'));
 const sha = buffer => createHash('sha256').update(buffer).digest('hex');
 async function download(url, dest, expected) {
   try { const data = await readFile(dest); if (!expected || sha(data) === expected) return data; } catch {}
@@ -29,6 +30,9 @@ const specs = [
   { id: 'manga-ocr', repo: 'mayocream/manga-ocr-onnx', revision: '24b12778d85800835e2ca409236de281b8ab7b9f', files: ['encoder_model.onnx', 'decoder_model.onnx', 'vocab.txt'], license: 'apache-2.0', backend: 'probe' },
 ];
 const lock = { schema: 1, generated: existing.generated??new Date().toISOString(), vision: [], llm: [], font: null };
+for (const extra of pinnedOcr.vision??[])if(!specs.some(s=>s.id===extra.id))lock.vision.push(extra);
+if(!pinnedOcr.ocrProfiles)throw Error('Restore the pinned OCR profile manifest before preparing assets');
+lock.ocrProfiles=pinnedOcr.ocrProfiles;
 for (const spec of specs) {
   const response = await fetch(`https://huggingface.co/api/models/${spec.repo}/tree/${spec.revision}?recursive=true`);
   if (!response.ok) throw new Error('Unable to resolve model metadata');

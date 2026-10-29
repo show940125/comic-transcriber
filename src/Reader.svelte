@@ -2,7 +2,10 @@
   import { onMount } from 'svelte';
   import { defaults, type Region, type Settings, type Diagnostic, type PageData } from './types';
   import { hashBlob, readingOrder, clampRegion, contentSignature, importCorrection } from './core';
-  import { loadPage, settings as readSettings } from './storage';
+  import { loadPage, legacyPages, settings as readSettings } from './storage';
+  import {engine} from './runtime';
+  import {ocrBytes} from './ocr-models';
+  import {withCandidate,applyCandidate,splitRegion} from './ocr-review';
   import { renderPage, loadFont } from './render';
   import { prepareChromeTranslator,disposeChromeTranslator } from './chrome-translator';
   import { needsOcrReview, ocrReviewWarning } from './ocr-quality';
@@ -31,7 +34,10 @@
   let alive=true;
   let fontReady = $state(false), imageUrl = '', signature = '';
   let remoteImageUrl = $state(''), permissionOrigin = $state('');
-  let metadata:PageSession['metadata'];
+  let metadata:PageSession['metadata'];let legacyModelKey:string|undefined;
+  let legacy=$state<PageData[]>([]),cropUrl=$state(''),splitting=$state(false);
+  let splitPreview=$state<{axis:'x'|'y';position:number;children:Region[]}>();
+  let splitUndo=$state<{regions:Region[];metadata:PageSession['metadata'];selected:string}>();
   const privateFiles=$derived(!siteInput&&parent===window&&location.protocol==='chrome-extension:'&&location.host===chrome.runtime.id);
   const editorId=crypto.randomUUID();let importActive=true,importBinding:CorrectionBinding|undefined;
   const deliveredImports=new Set<string>();
@@ -64,6 +70,19 @@
     });
   }
   const active = $derived(regions.find(r => r.id === selected));
+  $effect(()=>{const r=active,img=image;if(!r||!img){cropUrl='';return;}const rect=r.ocrBox??r,c=document.createElement('canvas');c.width=Math.max(1,rect.width);c.height=Math.max(1,rect.height);c.getContext('2d')!.drawImage(img,rect.x,rect.y,rect.width,rect.height,0,0,c.width,c.height);cropUrl=c.toDataURL();});
+  function invalidateRefinement(){if(metadata)delete metadata.refinement;}
+  async function compare(profile:'int8'|'fp32'){
+    if(!blob||!active)return;const id=active.id,oldHash=hash;
+    const result=await engine({op:'ocr',image:blob,regions:[$state.snapshot(active)],provider:config.ocrProvider,profile},progress,aborter?.signal);
+    aborter?.signal.throwIfAborted();if(!alive||hash!==oldHash)return;
+    const candidate=result[0]?.ocr;if(!candidate)throw Error('OCR 未回傳候選來源');
+    regions=regions.map(r=>r.id===id?withCandidate(r,candidate):r);await save();message='候選已保留；選擇套用後才更新原文';
+  }
+  function chooseCandidate(index:number){if(!active)return;legacyModelKey=undefined;splitUndo=undefined;const c=active.ocrCandidates?.[index];if(!c)return;if(c.source!==active.source)invalidateRefinement();regions=regions.map(r=>r.id===selected?applyCandidate(r,c):r);paint();detached(save,e=>error=String(e));}
+  function applySplit(){if(!active||!splitPreview)return;legacyModelKey=undefined;splitUndo={regions:$state.snapshot(regions),metadata:structuredClone($state.snapshot(metadata)),selected};const id=selected;regions=[...regions].sort((a,b)=>a.order-b.order).flatMap(r=>r.id===id?splitPreview!.children:[r]).map((r,order)=>({...r,order}));selected=splitPreview.children[0].id;splitPreview=undefined;splitting=false;invalidateRefinement();paint();detached(save,e=>error=String(e));}
+  function undoSplit(){if(!splitUndo)return;regions=splitUndo.regions;metadata=splitUndo.metadata;selected=splitUndo.selected;splitUndo=undefined;paint();detached(save,e=>error=String(e));}
+  async function restoreLegacy(page:PageData){legacyModelKey=page.modelKey;signature=page.modelKey;regions=importCorrection(page,hash,image!.naturalWidth,image!.naturalHeight);metadata={...metadata,refinement:undefined};selected=regions[0]?.id??'';splitUndo=undefined;message='已明確載入舊結果；OCR 模型來源未標記，原快取保留';paint();}
   function progress(d: Diagnostic) { message = d.message; stage = d.stage;if(d.backend)backend=d.backend;diagnostics = [...diagnostics.slice(-99), d]; onSiteProgress?.(d); }
   function paint() {
     if (!image || !preview) return;
@@ -81,28 +100,29 @@
   }
   function session():PageSession {
     if(!blob||!image)throw new Error('請先載入圖片');
-    return {blob,image,regions:$state.snapshot(regions),hash,modelKey:signature,config:$state.snapshot(config),cacheScope:privateFiles?'private':undefined,metadata};
+    return {blob,image,regions:$state.snapshot(regions),hash,modelKey:signature,legacyModelKey,config:$state.snapshot(config),cacheScope:privateFiles?'private':undefined,metadata};
   }
   const hooks=()=>({progress,signal:aborter?.signal,partial:(value:Region[])=>{if(alive){regions=value;paint();}}});
-  async function runStage(work:(page:PageSession)=>Promise<void>){const page=session();try{await work(page);}finally{if(alive){regions=page.regions;signature=page.modelKey;}}}
+  async function runStage(work:(page:PageSession)=>Promise<void>){const page=session();try{await work(page);}finally{if(alive){regions=page.regions;signature=page.modelKey;legacyModelKey=page.legacyModelKey;}}}
   async function save() {if(image&&hash)await saveSession(session());}
   async function load(input: Blob, name = 'comic') {
-    invalidatePendingImport();
+    splitUndo=undefined;splitPreview=undefined;splitting=false;
+    legacyModelKey=undefined;invalidatePendingImport();
     if (input.size > 20 * 1024 * 1024 || !input.type.startsWith('image/')) throw new Error('請使用 20 MB 以內的圖片');
     if (imageUrl) URL.revokeObjectURL(imageUrl);
     imageUrl = URL.createObjectURL(input); const next = new Image(); next.src = imageUrl; await next.decode();
     if (next.naturalWidth * next.naturalHeight > 30_000_000) throw new Error('圖片超過 3000 萬像素，請先裁切');
     image = next; blob = input; filename = name; hash = await hashBlob(input); signature = contentSignature(config,privateFiles?'private':undefined);
     const supplied=siteInput?.pageData;
-    let cached=await loadPage(hash,signature);
+    let cached=await loadPage(hash,signature);legacy=await legacyPages(hash,privateFiles);
     if(supplied?.hash===hash&&supplied.width===image.naturalWidth&&supplied.height===image.naturalHeight){cached=await loadPage(hash,supplied.modelKey)??supplied;}
     if(cached){let direct=false;try{const key=JSON.parse(cached.modelKey);direct=(key[0]==='private-reader-v1'?JSON.parse(key[1]):key)[1]==='gemini-web';}catch{}if(direct){config.backend='gemini-web';config.priorSummary=(await readSettings()).priorSummary;signature=contentSignature(config,privateFiles?'private':undefined);}}
     regions = (cached?.regions??[]).map(r=>({...r,bubbleBox:r.bubbleBox??(r.kind==='bubble'?r.ocrBox:undefined),ocrDone:r.ocrDone??(!!r.source.trim()||r.warnings.some(w=>/疑似無文字|缺少日文字元/.test(w)))})); selected = ''; original = false;
     metadata={sourcePageUrl:siteInput?.sourcePageUrl??cached?.sourcePageUrl,imageUrl:siteInput?.imageUrl??cached?.imageUrl,pageIndex:siteInput?.pageIndex??cached?.pageIndex,refinement:cached?.refinement};
     message = cached ? '已載入圖片與先前校正' : '圖片已載入，按「偵測文字框」或手動框選'; stage = cached ? 'complete' : 'idle'; paint();
   }
-  async function detect(){if(blob&&image)await runStage(page=>detectSession(page,hooks()));}
-  async function ocr(){if(blob)await runStage(page=>ocrSession(page,hooks()));}
+  async function detect(){splitUndo=undefined;invalidateRefinement();if(blob&&image)await runStage(page=>detectSession(page,hooks()));}
+  async function ocr(){splitUndo=undefined;splitPreview=undefined;splitting=false;if(blob)await runStage(page=>ocrSession(page,hooks()));}
   async function translate(){
     if(!siteInput?.auto)await extensionCall(()=>chrome.runtime.sendMessage({channel:'translation-resume'}));
     if(config.backend==='chrome'&&!siteInput){await prepareChromeTranslator(progress,aborter?.signal);disposeChromeTranslator();}
@@ -125,23 +145,27 @@
     const rect = preview.getBoundingClientRect();
     return { x: (event.clientX - rect.left) * (image?.naturalWidth ?? 1) / rect.width, y: (event.clientY - rect.top) * (image?.naturalHeight ?? 1) / rect.height };
   }
-  function down(event: PointerEvent) { if (drawing && image && !busy) { drawingStart = point(event); preview.setPointerCapture(event.pointerId); } }
+  function down(event: PointerEvent) { if ((drawing||splitting) && image && !busy) { drawingStart = point(event); preview.setPointerCapture(event.pointerId); } }
   function up(event: PointerEvent) {
     if (!drawingStart || !image) return;
     const end = point(event), start = drawingStart; drawingStart = undefined;
+    if(splitting&&active){const axis=Math.abs(end.x-start.x)>=Math.abs(end.y-start.y)?'y':'x',position=(start[axis]+end[axis])/2;try{splitPreview={axis,position,children:splitRegion($state.snapshot(active),axis,position)};message='分割預覽：直排由右至左、橫切由上至下；確認後套用';}catch(e){error=String(e);}return;}
     if (Math.abs(end.x - start.x) < 4 || Math.abs(end.y - start.y) < 4) return;
+    splitUndo=undefined;invalidateRefinement();
     const r = clampRegion({ id: crypto.randomUUID(), x: Math.min(start.x, end.x), y: Math.min(start.y, end.y), width: Math.abs(end.x - start.x), height: Math.abs(end.y - start.y), source: '', translation: '', order: regions.length, score: 1, warnings: ['人工框選'], kind: 'bubble', render: 'auto' }, image.naturalWidth, image.naturalHeight);
     regions = readingOrder([...regions, r]); selected = r.id; drawing = false; paint(); detached(save,e=>{error=String(e);});
   }
   function update(field: keyof Region, value: unknown) {
+    splitUndo=undefined;splitPreview=undefined;if(field==='source'&&value!==active?.source)invalidateRefinement();
     if (!image) return;
-    regions = regions.map(r => r.id === selected ? clampRegion({ ...r, ...(['x','y','width','height'].includes(field) ? { ocrBox: undefined,bubbleBox:undefined } : {}), ...(field==='source'?{initialTranslation:undefined,ocrDone:!!String(value).trim(),translation:value!==r.source?'':r.translation,needsReview:needsOcrReview(String(value)),warnings:[...r.warnings.filter(w=>w!==ocrReviewWarning),...(needsOcrReview(String(value))?[ocrReviewWarning]:[])]}:{}), [field]: value }, image!.naturalWidth, image!.naturalHeight) : r); paint(); detached(save,e=>{error=String(e);});
+    regions = regions.map(r => r.id === selected ? clampRegion({ ...r, ...(['x','y','width','height'].includes(field) ? { ocrBox: undefined,bubbleBox:undefined,ocr:undefined,ocrCandidates:undefined,ocrDone:false } : {}), ...(field==='source'?{ocr:undefined,ocrCandidates:undefined,initialTranslation:undefined,ocrDone:!!String(value).trim(),translation:value!==r.source?'':r.translation,needsReview:needsOcrReview(String(value)),warnings:[...r.warnings.filter(w=>w!==ocrReviewWarning),...(needsOcrReview(String(value))?[ocrReviewWarning]:[])]}:{}), [field]: value }, image!.naturalWidth, image!.naturalHeight) : r); paint(); detached(save,e=>{error=String(e);});
   }
-  function remove() { regions = regions.filter(r => r.id !== selected); selected = regions[0]?.id ?? ''; paint(); detached(save,e=>{error=String(e);}); }
+  function remove() {splitUndo=undefined;invalidateRefinement(); regions = regions.filter(r => r.id !== selected); selected = regions[0]?.id ?? ''; paint(); detached(save,e=>{error=String(e);}); }
   function merge() {
+    splitUndo=undefined;invalidateRefinement();
     const a = active, b = regions.find(r => r.order === (a?.order ?? -2) + 1); if (!a || !b) return;
     const x = Math.min(a.x, b.x), y = Math.min(a.y, b.y);
-    const r = { ...a, initialTranslation:undefined,ocrBox: undefined,bubbleBox:undefined, x, y, width: Math.max(a.x + a.width, b.x + b.width) - x, height: Math.max(a.y + a.height, b.y + b.height) - y, source: a.source + b.source, translation: [a.translation, b.translation].filter(Boolean).join('\n') };
+    const r = { ...a, ocr:undefined,ocrCandidates:undefined,initialTranslation:undefined,ocrBox: undefined,bubbleBox:undefined, x, y, width: Math.max(a.x + a.width, b.x + b.width) - x, height: Math.max(a.y + a.height, b.y + b.height) - y, source: a.source + b.source, translation: [a.translation, b.translation].filter(Boolean).join('\n') };
     regions = regions.filter(v => v.id !== b.id).map(v => v.id === a.id ? r : v); paint(); detached(save,e=>{error=String(e);});
   }
   function exportJson() { if (!image) return; download(new Blob([JSON.stringify({ schema: 1, hash, width: image.naturalWidth, height: image.naturalHeight, regions: $state.snapshot(regions), diagnostics }, null, 2)], { type: 'application/json' }), `${filename}.json`); }
@@ -208,11 +232,13 @@
   {#if error}<p class="error" role="alert">{error}</p>{/if}
   {#if permissionOrigin}<section aria-label="圖片來源授權"><p>漫畫圖片由 {permissionOrigin.replace('/*','')} 提供。授權這個來源後即可在本機辨識。</p><button disabled={busy} onclick={grantImage}>授權圖片來源並重試</button></section>
   {:else if remoteImageUrl && !image}<button disabled={busy} onclick={() => action(loadRemote)}>重新讀取網站圖片</button>{/if}
+  {#if legacy.length}<details><summary>找到 {legacy.length} 份舊版結果（legacy）</summary><p>明確載入後可繼續校正；新 OCR 使用獨立身分保存。</p>{#each legacy as page,index}<button disabled={busy} onclick={()=>action(()=>restoreLegacy(page))}>載入舊結果 {index+1}</button>{/each}</details>{/if}
   <div class="workspace">
     <section class="paper">
       {#if !image}<div class="empty"><span>墨</span><h2>把故事，讀成自己的語言。</h2><p>載入漫畫後，確認文字框、辨識日文，再翻譯成繁體中文。<br>原畫與每個步驟的文字都可以保留與校正。</p></div>{/if}
-      <div class="image-wrap" class:drawing bind:this={preview} role="presentation" onpointerdown={down} onpointerup={up}></div>
+      <div class="image-wrap" class:drawing={drawing||splitting} bind:this={preview} role="presentation" onpointerdown={down} onpointerup={up}></div>
       {#if image}
+        {#if splitPreview}<div class="split-line" style={splitPreview.axis==='x'?`left:${splitPreview.position/image.naturalWidth*100}%;top:0;height:100%;border-left:3px dashed #b2783e`:`top:${splitPreview.position/image.naturalHeight*100}%;left:0;width:100%;border-top:3px dashed #b2783e`}></div>{/if}
         <div class="regions" style={`aspect-ratio:${image.naturalWidth}/${image.naturalHeight}`}>
           {#each regions as r}<button class:selected={selected === r.id} style={`left:${r.x / image.naturalWidth * 100}%;top:${r.y / image.naturalHeight * 100}%;width:${r.width / image.naturalWidth * 100}%;height:${r.height / image.naturalHeight * 100}%`} title={`文字框 ${r.order + 1}`} aria-label={`選取文字框 ${r.order + 1}`} onclick={() => selected = r.id}><span>{r.order + 1}</span></button>{/each}
         </div>
@@ -220,8 +246,16 @@
     </section>
     <aside>
       <h2>文字與校正 <small>{regions.length} 個區域</small></h2>
-      <select aria-label="選擇文字框" bind:value={selected}><option value="">選擇區域</option>{#each regions as r}<option value={r.id}>{r.order + 1} · {r.source.slice(0, 16) || '尚未辨識'}</option>{/each}</select>
+      <select aria-label="選擇文字框" disabled={busy} bind:value={selected}><option value="">選擇區域</option>{#each regions as r}<option value={r.id}>{r.order + 1} · {r.source.slice(0, 16) || '尚未辨識'}</option>{/each}</select>
       {#if active}
+        <img class="ocr-crop" src={cropUrl} alt="選定框原始裁圖" />
+        <p class="hint">偵測分數：{active.score.toFixed(3)} · OCR 信心：{active.ocr?.confidence===undefined?'未提供':active.ocr.confidence.toFixed(3)}</p>
+        <p class="hint">{active.ocr?`${active.ocr.profile} / ${active.ocr.decoder} / ${active.ocr.backend}`:'手動或舊結果，OCR 來源未標記'}</p>
+        <p class="hint">另一模式約 {Math.ceil(ocrBytes(config.ocrProfile==='int8'?'fp32':'int8')/1048576)} MiB；首次比較會準備該模式的模型。</p>
+        <div class="row"><button disabled={busy} onclick={()=>action(()=>compare(config.ocrProfile))}>重新辨識此框</button><button disabled={busy} onclick={()=>action(()=>compare(config.ocrProfile==='int8'?'fp32':'int8'))}>使用另一模式比較</button><button disabled={busy} onclick={()=>{splitting=!splitting;drawing=false;splitPreview=undefined;message='在原圖拖曳水平或垂直分割線';}}>拆框</button></div>
+        {#if splitPreview}<div class="row"><button disabled={busy} onclick={applySplit}>套用拆框</button><button onclick={()=>{splitPreview=undefined;splitting=false;}}>取消拆框</button></div>{/if}
+        {#if splitUndo}<button disabled={busy} onclick={undoSplit}>撤銷拆框</button>{/if}
+        {#each active.ocrCandidates??[] as candidate,index}<details open><summary>候選 {index+1} · {candidate.profile} / {candidate.decoder}</summary><p>{candidate.source||'（空結果）'}</p><small>{candidate.backend} · {candidate.preprocessing}</small><button disabled={busy} onclick={()=>chooseCandidate(index)}>套用候選 {index+1}</button></details>{/each}
         <label>日文原文<textarea aria-label="日文原文" rows="4" value={active.source} oninput={e => update('source', e.currentTarget.value)} disabled={busy}></textarea></label>
         <label>繁中譯文<textarea aria-label="繁中譯文" rows="4" value={active.translation} oninput={e => update('translation', e.currentTarget.value)} disabled={busy}></textarea></label>
         {#if active.initialTranslation!==undefined}<details><summary>Google 初譯</summary><p>{active.initialTranslation}</p><button disabled={busy} onclick={()=>update('translation',active!.initialTranslation!)}>還原此框初譯</button></details>{/if}
@@ -240,5 +274,7 @@
 </main>
 
 <style>
-  :global(*){box-sizing:border-box} :global(body){margin:0;background:#f1eee6;color:#25362f;font-family:"Microsoft JhengHei",sans-serif} :global(button),:global(input),:global(select),:global(textarea){font:inherit}main{max-width:1480px;margin:auto;padding:28px}header{display:flex;justify-content:space-between;align-items:center;margin-bottom:24px}h1{font-size:30px;margin:7px 0 0}h1 span{font-size:16px;font-weight:400;margin-left:15px;color:#67756c}.eyebrow{font-size:10px;letter-spacing:3px;color:#6c7c6e}a{color:#355947;font-size:13px}button,.file{border:1px solid #c8d1c7;border-radius:7px;background:#fafaf6;color:#314b3e;padding:10px 13px;cursor:pointer}button:disabled{opacity:.45;cursor:default}.primary,.chosen{background:#284e3c;color:white;border-color:#284e3c}.toolbar{display:flex;gap:8px;flex-wrap:wrap}.file{position:relative;background:#e1e8dd}.file input{position:absolute;inset:0;opacity:0;width:100%;cursor:pointer}.status{display:flex;align-items:center;gap:9px;font-size:13px;padding:16px 0;flex-wrap:wrap}.status small{margin-left:auto;color:#6d7b70}.dot{height:8px;width:8px;background:#6e987c;border-radius:100%}.working{animation:pulse 1s infinite}@keyframes pulse{50%{opacity:.25}}.workspace{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:24px;align-items:start}.paper{position:relative;background:white;min-height:550px;box-shadow:0 5px 25px #36473812}.empty{padding:100px 25px;text-align:center}.empty>span{font-size:90px;font-family:serif;color:#b8c6b8}.empty h2{font-size:23px}.empty p{font-size:14px;line-height:2;color:#768177}.image-wrap{width:100%;touch-action:none}.image-wrap :global(canvas){width:100%;height:auto;display:block}.drawing{cursor:crosshair}.regions{position:absolute;inset:0;pointer-events:none}.regions button{position:absolute;pointer-events:auto;border:1px solid #628d7080;background:transparent;border-radius:0;padding:0}.drawing+.regions{pointer-events:none}.drawing+.regions button{pointer-events:none}.regions .selected{border:2px solid #b2783e}.regions span{position:absolute;left:0;top:0;background:#355c46;color:white;font-size:10px;padding:1px 4px}aside{background:#f9f9f4;border:1px solid #d8ddd2;border-radius:10px;padding:18px}h2{font-size:16px}h2 small{font-size:11px;color:#758276}label{display:block;font-size:12px;color:#65756a;margin:15px 0 8px}textarea,input,select{display:block;width:100%;padding:8px;background:white;border:1px solid #cdd5ca;border-radius:5px;color:#263f31}textarea{resize:vertical;line-height:1.6}.coords{display:grid;grid-template-columns:repeat(3,1fr);gap:7px}.coords input{padding:6px}.row,.export{display:flex;gap:6px;flex-wrap:wrap}.export{border-top:1px solid #d8ddd2;margin-top:18px;padding-top:18px}.export button,.row button{font-size:12px}.hint{font-size:13px;line-height:1.7;color:#7b877a}.error{background:#ffe7dc;color:#8c3423;padding:12px;border-radius:5px}.warning{color:#876126;font-size:12px}.privacy{display:block;line-height:1.7;color:#798477;margin-top:20px}details{margin-top:18px;font-size:12px}.diagnostic{border-bottom:1px solid #e5e8e0;padding-bottom:7px}.diagnostic small{display:block;color:#798477;margin-top:4px}@media(max-width:850px){main{padding:14px}.workspace{grid-template-columns:1fr}.paper{min-height:300px}header{align-items:start}h1 span{display:block;margin:5px 0}aside{width:100%}}
+  .split-line{position:absolute;pointer-events:none;z-index:3}.ocr-crop{max-width:100%;max-height:240px;object-fit:contain;background:white}
+
+  :global(*){box-sizing:border-box} :global(body){margin:0;background:#f1eee6;color:#25362f;font-family:"Microsoft JhengHei",sans-serif} :global(button),:global(input),:global(select),:global(textarea){font:inherit}main{max-width:1480px;margin:auto;padding:28px}header{display:flex;justify-content:space-between;align-items:center;margin-bottom:24px}h1{font-size:30px;margin:7px 0 0}h1 span{font-size:16px;font-weight:400;margin-left:15px;color:#67756c}.eyebrow{font-size:10px;letter-spacing:3px;color:#6c7c6e}a{color:#355947;font-size:13px}button,.file{border:1px solid #c8d1c7;border-radius:7px;background:#fafaf6;color:#314b3e;padding:10px 13px;cursor:pointer}button:disabled{opacity:.45;cursor:default}.primary,.chosen{background:#284e3c;color:white;border-color:#284e3c}.toolbar{display:flex;gap:8px;flex-wrap:wrap}.file{position:relative;background:#e1e8dd}.file input{position:absolute;inset:0;opacity:0;width:100%;cursor:pointer}.status{display:flex;align-items:center;gap:9px;font-size:13px;padding:16px 0;flex-wrap:wrap}.status small{margin-left:auto;color:#6d7b70}.dot{height:8px;width:8px;background:#6e987c;border-radius:100%}.working{animation:pulse 1s infinite}@keyframes pulse{50%{opacity:.25}}.workspace{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:24px;align-items:start}.paper{position:relative;background:white;min-height:550px;box-shadow:0 5px 25px #36473812}.empty{padding:100px 25px;text-align:center}.empty>span{font-size:90px;font-family:serif;color:#b8c6b8}.empty h2{font-size:23px}.empty p{font-size:14px;line-height:2;color:#768177}.image-wrap{width:100%;touch-action:none}.image-wrap :global(canvas){width:100%;height:auto;display:block}.drawing{cursor:crosshair}.regions{position:absolute;inset:0;pointer-events:none}.regions button{position:absolute;pointer-events:auto;border:1px solid #628d7080;background:transparent;border-radius:0;padding:0}.drawing~.regions{pointer-events:none}.drawing~.regions button{pointer-events:none}.regions .selected{border:2px solid #b2783e}.regions span{position:absolute;left:0;top:0;background:#355c46;color:white;font-size:10px;padding:1px 4px}aside{background:#f9f9f4;border:1px solid #d8ddd2;border-radius:10px;padding:18px}h2{font-size:16px}h2 small{font-size:11px;color:#758276}label{display:block;font-size:12px;color:#65756a;margin:15px 0 8px}textarea,input,select{display:block;width:100%;padding:8px;background:white;border:1px solid #cdd5ca;border-radius:5px;color:#263f31}textarea{resize:vertical;line-height:1.6}.coords{display:grid;grid-template-columns:repeat(3,1fr);gap:7px}.coords input{padding:6px}.row,.export{display:flex;gap:6px;flex-wrap:wrap}.export{border-top:1px solid #d8ddd2;margin-top:18px;padding-top:18px}.export button,.row button{font-size:12px}.hint{font-size:13px;line-height:1.7;color:#7b877a}.error{background:#ffe7dc;color:#8c3423;padding:12px;border-radius:5px}.warning{color:#876126;font-size:12px}.privacy{display:block;line-height:1.7;color:#798477;margin-top:20px}details{margin-top:18px;font-size:12px}.diagnostic{border-bottom:1px solid #e5e8e0;padding-bottom:7px}.diagnostic small{display:block;color:#798477;margin-top:4px}@media(max-width:850px){main{padding:14px}.workspace{grid-template-columns:1fr}.paper{min-height:300px}header{align-items:start}h1 span{display:block;margin:5px 0}aside{width:100%}}
 </style>

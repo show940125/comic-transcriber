@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {cachePage,loadPage,settings,ocrReusePages} from '../src/storage';
+import {cachePage,loadPage,settings,ocrReusePages,legacyPages} from '../src/storage';
 import {contentSignature} from '../src/core';
 import {defaults,type PageData} from '../src/types';
 function storageFixture(){
@@ -9,6 +9,13 @@ function storageFixture(){
  return values;
 }
 function page(hash:string,modelKey:string):PageData{return {schema:1,hash,width:100,height:100,regions:[],title:'',chapter:'',glossary:'',summary:'已翻譯的對白',modelKey};}
+test('old OCR results require explicit load and keep private/public separation',async()=>{
+ const values=storageFixture(),old=JSON.stringify(['pipeline-3-ocr-review','google-web']),privateOld=JSON.stringify(['private-reader-v1',old]);
+ const publicKey=`page:h:${old}`,privateKey=`page:h:${privateOld}`;values[publicKey]=page('h',old);values[privateKey]=page('h',privateOld);values.pageKeys=[publicKey,privateKey];
+ assert.equal(await loadPage('h',contentSignature(defaults)),undefined);
+ assert.equal((await legacyPages('h',false))[0].modelKey,old);assert.equal((await legacyPages('h',true))[0].modelKey,privateOld);
+ await cachePage(page('h',contentSignature(defaults)));assert(values[publicKey]);assert(values[privateKey]);
+});
 test('concurrent page saves retain both cache keys and both correction payloads',async()=>{
  const values=storageFixture(),key=contentSignature(defaults),one=page('first',key),two=page('second',key);one.summary='第一張人工校正';two.summary='第二張人工校正';
  await Promise.all([cachePage(one),cachePage(two)]);assert.equal(values.pageKeys.length,2);assert.equal((await loadPage('first',key))?.summary,one.summary);assert.equal((await loadPage('second',key))?.summary,two.summary);
@@ -21,15 +28,15 @@ test('editing a legacy cached page keeps source metadata and corrections without
  await cachePage(original);await cachePage({...page('kept',key),summary:'人工修訂'});const result=await loadPage('kept',key);assert.equal(result?.summary,'人工修訂');assert.equal(result?.sourcePageUrl,original.sourcePageUrl);assert.equal(result?.savedAt,123);assert.equal(values.pageKeys.length,1);
 });
 test('legacy Google cache restores translated page across unused previous-page summaries',async()=>{
- const values=storageFixture(),current=contentSignature(defaults),legacy=JSON.parse(current);legacy[9]='作品';legacy[12]='先前對白';const key=`page:abc:${JSON.stringify(legacy)}`;
+ const values=storageFixture(),current=contentSignature(defaults),legacy=JSON.parse(current);legacy[10]='作品';legacy[13]='先前對白';const key=`page:abc:${JSON.stringify(legacy)}`;
  values[key]=page('abc',JSON.stringify(legacy));values.pageKeys=[key];
  const result=await loadPage('abc',current);assert.equal(result?.summary,'已翻譯的對白');assert.equal(result?.modelKey,current);
  await cachePage(result!);assert.deepEqual(values.pageKeys,[`page:abc:${current}`]);assert.equal(values[key],undefined);assert.equal((await loadPage('abc',current))?.summary,'已翻譯的對白');
 });
 test('local LLM context changes cannot reuse legacy page and cache migration does not evict other pages',async()=>{
- const values=storageFixture(),local=contentSignature({...defaults,backend:'local'}),legacy=JSON.parse(local);legacy[12]='先前對白';const key=`page:abc:${JSON.stringify(legacy)}`;
+ const values=storageFixture(),local=contentSignature({...defaults,backend:'local'}),legacy=JSON.parse(local);legacy[13]='先前對白';const key=`page:abc:${JSON.stringify(legacy)}`;
  values[key]=page('abc',JSON.stringify(legacy));values.pageKeys=[key];assert.equal(await loadPage('abc',local),undefined);
- const google=contentSignature(defaults),prior=JSON.parse(google);prior[12]='上一頁';const googleKey=`page:xyz:${JSON.stringify(prior)}`;values[googleKey]=page('xyz',JSON.stringify(prior));values.pageKeys=[googleKey,key];
+ const google=contentSignature(defaults),prior=JSON.parse(google);prior[13]='上一頁';const googleKey=`page:xyz:${JSON.stringify(prior)}`;values[googleKey]=page('xyz',JSON.stringify(prior));values.pageKeys=[googleKey,key];
  await cachePage(page('xyz',google));assert.equal(values.pageKeys.length,2);assert(values[key]);assert(!values[googleKey]);
 });
 
