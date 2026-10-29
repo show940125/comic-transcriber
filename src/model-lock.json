@@ -43,6 +43,54 @@
       ],
       "license": "apache-2.0",
       "backend": "probe"
+    },
+    {
+      "id": "manga-ocr-int8",
+      "repo": "ogkalu/manga-ocr-onnx",
+      "revision": "c68e56437a2e0b13a7b1f4efa0ffce76efd0478d",
+      "license": "apache-2.0",
+      "backend": "wasm",
+      "files": [
+        {
+          "name": "encoder_model_int8.onnx",
+          "url": "https://huggingface.co/ogkalu/manga-ocr-onnx/resolve/c68e56437a2e0b13a7b1f4efa0ffce76efd0478d/encoder_model_int8.onnx?download=true",
+          "sha256": "0eaf2b867292a44700ce38ef028b90639a2e36fc4c18c2bcdd1de7409488adb3",
+          "bytes": 87074595
+        },
+        {
+          "name": "decoder_model_int8.onnx",
+          "url": "https://huggingface.co/ogkalu/manga-ocr-onnx/resolve/c68e56437a2e0b13a7b1f4efa0ffce76efd0478d/decoder_model_int8.onnx?download=true",
+          "sha256": "3ff0d4c34c4a66613d98ff93e0b17f22a7b09dfbeec195c3e4d6f595af3a6b6c",
+          "bytes": 29675736
+        },
+        {
+          "name": "vocab.txt",
+          "url": "https://huggingface.co/ogkalu/manga-ocr-onnx/resolve/c68e56437a2e0b13a7b1f4efa0ffce76efd0478d/vocab.txt?download=true",
+          "sha256": "5cb5c5586d98a2f331d9f8828e4586479b0611bfba5d8c3b6dadffc84d6a36a3",
+          "bytes": 30216
+        }
+      ]
+    },
+    {
+      "id": "manga-ocr-kv",
+      "repo": "hajisensai/Fushi",
+      "revision": "manga-ocr-kv-onnx-v1",
+      "license": "apache-2.0",
+      "backend": "wasm",
+      "files": [
+        {
+          "name": "cross_kv.onnx",
+          "url": "https://github.com/hajisensai/Fushi/releases/download/manga-ocr-kv-onnx-v1/cross_kv.onnx",
+          "sha256": "3355a58b0e05f874d7fbb332df6824c0e6634d0b99c756322ba119a9d3f35722",
+          "bytes": 9456696
+        },
+        {
+          "name": "decoder_kv.onnx",
+          "url": "https://github.com/hajisensai/Fushi/releases/download/manga-ocr-kv-onnx-v1/decoder_kv.onnx",
+          "sha256": "db4907131dc96308c3d9e4910db2238cf2dee5cfcb1cd3ae7c7b52d630cd8de5",
+          "bytes": 89050460
+        }
+      ]
     }
   ],
   "llm": [
@@ -117,5 +165,43 @@
     "license": "OFL-1.1",
     "licenseUrl": "https://raw.githubusercontent.com/notofonts/noto-cjk/f8d157532fbfaeda587e826d4cd5b21a49186f7c/Sans/LICENSE",
     "licenseSha256": "6a73f9541c2de74158c0e7cf6b0a58ef774f5a780bf191f2d7ec9cc53efe2bf2"
+  },
+  "ocrProfiles": {
+    "int8": {
+      "encoder": {
+        "model": "manga-ocr-int8",
+        "file": "encoder_model_int8.onnx"
+      },
+      "decoder": {
+        "model": "manga-ocr-int8",
+        "file": "decoder_model_int8.onnx"
+      },
+      "vocab": {
+        "model": "manga-ocr-int8",
+        "file": "vocab.txt"
+      },
+      "decode": "standard",
+      "preprocessing": "canvas-gray-224-v1"
+    },
+    "fp32": {
+      "encoder": {
+        "model": "manga-ocr",
+        "file": "encoder_model.onnx"
+      },
+      "decoder": {
+        "model": "manga-ocr-kv",
+        "file": "decoder_kv.onnx"
+      },
+      "cross": {
+        "model": "manga-ocr-kv",
+        "file": "cross_kv.onnx"
+      },
+      "vocab": {
+        "model": "manga-ocr",
+        "file": "vocab.txt"
+      },
+      "decode": "kv",
+      "preprocessing": "canvas-gray-224-v1"
+    }
   }
 }

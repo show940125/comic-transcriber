@@ -1,3 +1,5 @@
+import {ocrIdentity} from './ocr-models';
+import {cleanOcrCandidate,cleanOcrCandidates} from './ocr-review';
 import type { Region, Settings } from './types';
 import { needsOcrReview } from './ocr-quality';
 export function readingOrder(regions: Region[]): Region[] {
@@ -79,16 +81,16 @@ export function importCorrection(data: unknown, hash: string, width: number, hei
     if(r.textDirection!==undefined&&!['auto','horizontal','vertical'].includes(r.textDirection))throw new Error('校正排版方向不合法');
     if(r.fontScale!==undefined&&(!Number.isFinite(r.fontScale)||r.fontScale<.5||r.fontScale>2))throw new Error('校正字級倍率不合法');
     if(r.initialTranslation!==undefined&&(typeof r.initialTranslation!=='string'||r.initialTranslation.length>1500))throw new Error('初譯資料不合法');
-    return { id:r.id,x:r.x,y:r.y,width:r.width,height:r.height,order:r.order,source:r.source,translation:r.translation,initialTranslation:r.initialTranslation,ocrDone:r.ocrDone===true,needsReview:needsOcrReview(r.source),kind:r.kind==='free'?'free':'bubble',render:['auto','fill','overlay','rectangle'].includes(r.render)?r.render:'auto',score:Number.isFinite(r.score)?r.score:1,warnings:Array.isArray(r.warnings)?r.warnings.filter(w=>typeof w==='string').slice(0,10):[],ocrBox:rect(r.ocrBox),bubbleBox:rect(r.bubbleBox),textDirection:r.textDirection??'auto',fontScale:r.fontScale??1 };
+    return { id:r.id,x:r.x,y:r.y,width:r.width,height:r.height,order:r.order,source:r.source,translation:r.translation,initialTranslation:r.initialTranslation,ocr:cleanOcrCandidate(r.ocr),ocrCandidates:cleanOcrCandidates(r.ocrCandidates),ocrDone:r.ocrDone===true,needsReview:needsOcrReview(r.source),kind:r.kind==='free'?'free':'bubble',render:['auto','fill','overlay','rectangle'].includes(r.render)?r.render:'auto',score:Number.isFinite(r.score)?r.score:1,warnings:Array.isArray(r.warnings)?r.warnings.filter(w=>typeof w==='string').slice(0,10):[],ocrBox:rect(r.ocrBox),bubbleBox:rect(r.bubbleBox),textDirection:r.textDirection??'auto',fontScale:r.fontScale??1 };
   });
 }
 export function contentSignature(settings: Settings,cacheScope?:'private'): string {
   const context=['google-web','chrome'].includes(settings.backend)?['','','','']:[settings.title,settings.chapter,settings.glossary,settings.priorSummary];
   const instructions=translationInstructions(settings);if(!['google-web','chrome'].includes(settings.backend)&&instructions)context.push('translation-instructions',instructions);
-  const key=JSON.stringify(['pipeline-3-ocr-review', settings.backend, settings.model, settings.localFallback, settings.endpoint, settings.localModel, settings.localOcr, settings.ocrEndpoint, settings.ocrProvider, ...context]);
+  const key=JSON.stringify(['pipeline-4-ocr-identity', settings.backend, settings.model, settings.localFallback, settings.endpoint, settings.localModel, settings.localOcr, settings.ocrEndpoint, settings.ocrProvider, settings.localOcr?'local-ocr-unversioned':ocrIdentity(settings.ocrProfile), ...context]);
   return cacheScope==='private'?JSON.stringify(['private-reader-v1',key]):key;
 }
 export function compatiblePageKey(stored:string,current:string):boolean {
   if(stored===current)return true;
-  try{const before=JSON.parse(stored),after=JSON.parse(current);return Array.isArray(before)&&Array.isArray(after)&&before.length===13&&after.length===13&&['google-web','chrome'].includes(after[1])&&JSON.stringify(before.slice(0,9))===JSON.stringify(after.slice(0,9));}catch{return false;}
+  try{const before=JSON.parse(stored),after=JSON.parse(current);return Array.isArray(before)&&Array.isArray(after)&&before.length===14&&after.length===14&&before[0]==='pipeline-4-ocr-identity'&&after[0]===before[0]&&['google-web','chrome'].includes(after[1])&&JSON.stringify(before.slice(0,10))===JSON.stringify(after.slice(0,10));}catch{return false;}
 }

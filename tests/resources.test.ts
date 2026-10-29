@@ -10,8 +10,8 @@ test('idle release waits for all activity, resets on new work and stops after di
  idle.activity(0);t.mock.timers.tick(59999);assert.equal(released,0);idle.activity(1);idle.activity(0);t.mock.timers.tick(60000);assert.equal(released,1);
  idle.activity(0);idle.dispose();t.mock.timers.tick(60000);assert.equal(released,1);
 });
-test('thread selection needs both isolation and shared memory; auto retains baseline',()=>{
- assert.equal(resolveThreads('auto',true,true).threads,1);assert.equal(resolveThreads(4,true,true).threads,4);
+test('thread selection needs both isolation and shared memory; auto uses bounded hardware budget',()=>{
+ assert.equal(resolveThreads('auto',true,true,12).threads,4);assert.equal(resolveThreads(4,true,true).threads,4);
  assert.equal(resolveThreads(2,false,true).threads,1);assert(resolveThreads(4,true,false).reason);
  assert.equal(resolveThreads(99 as any,true,true).threads,1);
 });

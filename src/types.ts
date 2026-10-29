@@ -1,5 +1,10 @@
 export type Stage = 'queued' | 'loading' | 'detecting' | 'review' | 'ocr' | 'translating' | 'rendering' | 'complete' | 'error' | 'cancelled';
 export interface Rect { x:number; y:number; width:number; height:number }
+export type OcrProfile = 'int8' | 'fp32';
+export interface OcrCandidate {
+  source:string;profile:OcrProfile|'legacy';identity:string;preprocessing:string;decoder:'standard'|'kv'|'unknown';
+  backend:string;warnings:string[];at:number;confidence?:number;
+}
 export interface Region {
   id: string; x: number; y: number; width: number; height: number; order: number;
   source: string; translation: string; score: number; warnings: string[];
@@ -11,6 +16,8 @@ export interface Region {
   textDirection?: 'auto' | 'horizontal' | 'vertical';
   fontScale?: number;
   initialTranslation?:string;
+  ocr?:OcrCandidate;
+  ocrCandidates?:OcrCandidate[];
 }
 export interface PageData {
   schema: 1; hash: string; width: number; height: number; regions: Region[];
@@ -30,6 +37,7 @@ export interface Settings {
   translationInstructions: string;
   pageConcurrency: 1 | 2;
   wasmThreads: 'auto'|1|2|4;
+  ocrProfile:OcrProfile;
   autoSites?:string[];
   refineAfterChapter?:boolean;
   chapterMode?:'standard'|'gemini-direct';
@@ -41,15 +49,16 @@ export const defaults: Settings = {
   translationInstructions: '',
   pageConcurrency: 2,
   wasmThreads: 'auto',
+  ocrProfile:'int8',
   refineAfterChapter: true,
   chapterMode: 'standard',
 };
 export type EngineRequest =
   | { op: 'detect'; image: Blob; width: number; height: number }
-  | { op: 'ocr'; image: Blob; regions: Region[]; provider?: 'auto' | 'wasm' }
+  | { op: 'ocr'; image: Blob; regions: Region[]; provider?: 'auto' | 'wasm';profile?:OcrProfile }
   | { op:'local-ocr'; image:Blob; regions:Region[]; endpoint:string }
   | { op: 'translate'; regions: Region[]; settings: Settings; modelId: string }
-  | { op: 'prefetch'; modelId: string }
+  | { op: 'prefetch'; modelId: string;profile?:OcrProfile }
   | { op: 'release-llm' }
   | { op: 'runtime-info' }
   | { op: 'probe'; refresh?: boolean };

@@ -6,6 +6,7 @@ export async function settings(): Promise<Settings> {
   const result = await extensionCall(()=>chrome.storage.local.get('settings'));
   const value={ ...defaults, ...(result.settings as Partial<Settings> | undefined) };
   value.pageConcurrency=value.pageConcurrency===1?1:2;
+  value.ocrProfile=value.ocrProfile==='fp32'?'fp32':'int8';
   value.chapterMode=value.chapterMode==='gemini-direct'?'gemini-direct':'standard';
   value.translationInstructions=translationInstructions(value);
   value.autoSites=specificSites(value.autoSites);
@@ -36,6 +37,14 @@ async function writePage(page:PageData) {
 }
 export async function loadPage(hash: string, modelKey: string): Promise<PageData | undefined> {
   return extensionCall(()=>readPage(hash,modelKey));
+}
+export async function legacyPages(hash:string,privateScope:boolean):Promise<PageData[]> {
+  const {pageKeys=[]}=await extensionCall(()=>chrome.storage.local.get<{pageKeys:string[]}>('pageKeys'));
+  const keys=pageKeys.filter(k=>k.startsWith(`page:${hash}:`)).filter(k=>{
+    try{let key=JSON.parse(k.slice(`page:${hash}:`.length));const privateKey=key[0]==='private-reader-v1';if(privateKey)key=JSON.parse(key[1]);return privateKey===privateScope&&key[0]!=='pipeline-4-ocr-identity';}catch{return false;}
+  });
+  const values=keys.length?await extensionCall(()=>chrome.storage.local.get(keys)):{};
+  return keys.map(k=>values[k] as PageData).filter(p=>p?.schema===1&&p.hash===hash);
 }
 // Capture the bounded page cache before direct-mode writes rotate its 30 keys.
 export async function ocrReusePages(config:Settings):Promise<Map<string,PageData>>{

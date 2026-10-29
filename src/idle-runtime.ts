@@ -7,7 +7,7 @@ export class IdleRuntime {
   dispose(){this.disposed=true;this.clear();}
   private clear(){if(this.timer!==undefined)clearTimeout(this.timer);this.timer=undefined;}
 }
-export function resolveThreads(requested:'auto'|1|2|4,isolated:boolean,shared:boolean){
-  const wanted=requested===2||requested===4?requested:1;
+export function resolveThreads(requested:'auto'|1|2|4,isolated:boolean,shared:boolean,hardware=globalThis.navigator?.hardwareConcurrency??2){
+  const wanted=requested==='auto'?Math.min(4,Math.max(1,Math.floor((Number.isFinite(hardware)&&hardware>0?hardware:2)/2))):requested===2||requested===4?requested:1;
   return {requested,threads:isolated&&shared?wanted:1,reason:wanted>1&&(!isolated||!shared)?'此推論文件未提供跨來源隔離或 SharedArrayBuffer，使用單執行緒':undefined};
 }
