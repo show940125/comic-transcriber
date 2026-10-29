@@ -71,6 +71,12 @@ test('unknown chapter stream failure records timing diagnostics and never perfor
  assert.equal(calls,1);assert.equal(jobs.at(-1).status,'unknown');assert.equal(jobs.at(-1).diagnostic.cause,'timeout');
 });
 
+test('chapter success preserves bounded-stream counters and the truncated raw marker',async()=>{
+ const jobs:any[]=[],diagnostic={receivedCharacters:4_000_000,receivedBytes:6_000_000,frames:320,peakFrameCharacters:30000,answerCharacters:30,rawExcerptCharacters:24000};
+ await refineChapter([page(1)],defaults,undefined,async job=>{jobs.push(job);},async()=>({text:'[{"id":"p1r1","text":"校訂成功"}]',raw:'x'.repeat(24000),rawTruncated:true,diagnostic,build:'fixture'}));
+ assert.equal(jobs.at(-1).rawTruncated,true);assert.deepEqual(jobs.at(-1).diagnostic,diagnostic);assert.equal(jobs.at(-1).raw.length,24000);
+});
+
 
 test('switching to Google second-pass mode never relabels or overwrites direct translations as Google drafts',()=>{
  const p=page(1);p.refinement={fingerprint:'f',at:1,provider:'gemini-web',promptVersion:3,mode:'direct'};

@@ -1,5 +1,5 @@
 import {test} from 'node:test';import assert from 'node:assert/strict';
-import {parseGeminiFrames,geminiBody,anonymousGemini,geminiTranslate,translationBatches,GeminiFailure,bootstrapVersion} from '../src/gemini-web';
+import {parseGeminiFrames,geminiBody,anonymousGemini,geminiTranslate,translationBatches,GeminiFailure,bootstrapVersion,geminiStreamLimits} from '../src/gemini-web';
 import {defaults,type Region} from '../src/types';
 const region=(id:string,source='こんにちは'):Region=>({id,source,translation:'',order:Number(id)||0,x:0,y:0,width:50,height:50,score:1,warnings:[],kind:'bubble',render:'auto'});
 const frame=(text:string)=>JSON.stringify([['wrb.fr','rpc',JSON.stringify([null,null,null,null,[['candidate',[text]]]])]]);
@@ -7,6 +7,35 @@ test('bootstrap accepts observed Gemini uiserver rename and legacy server label'
 test('anonymous stream assembles complete final candidate across framing lines',()=>{
  assert.equal(parseGeminiFrames(")]}'\n\n123\n"+frame('古')+'\n99\n'+frame('最後翻譯')),'最後翻譯');assert.throws(()=>parseGeminiFrames(frame('')+'\n[truncated'));
  const data=JSON.parse(JSON.parse(geminiBody('hello').get('f.req')!)[1]);assert.equal(data[0][0],'hello');assert.equal(data[79],null);
+});
+
+test('a 19-page cumulative stream exceeding the old 2M limit preserves the final answer with bounded diagnostics',async()=>{
+ const rows=Array.from({length:19*12},(_,n)=>({id:`p${Math.floor(n/12)+1}r${n%12+1}`,text:`這是第${n+1}框的原創測試對話。`.repeat(4)})),text=JSON.stringify(rows);
+ const raw=")]}'\n\n"+Array.from({length:320},(_,n)=>frame(text.slice(0,Math.ceil(text.length*(n+1)/320)))+'\n').join('');
+ assert(raw.length>2_000_000);const bytes=new TextEncoder().encode(raw);let posts=0,offset=0;
+ const fetcher:typeof fetch=async(_url,init)=>{if(init?.method!=='POST')return new Response('boq_gemini-web-uiserver_20261013.29_p0');posts++;
+  return new Response(new ReadableStream({pull(c){if(offset===bytes.length){c.close();return;}const end=Math.min(offset+8191,bytes.length);c.enqueue(bytes.subarray(offset,end));offset=end;}}));};
+ const result=await anonymousGemini('19-page fixture',undefined,fetcher);
+ assert.equal(result.text,text);assert.equal(posts,1);assert(result.raw.length<=24000);
+ assert.equal(result.rawTruncated,true);assert.equal(result.diagnostic?.receivedCharacters,raw.length);assert.equal(result.diagnostic?.receivedBytes,bytes.length);assert.equal(result.diagnostic?.frames,320);
+});
+
+test('individual frame and answer limits remain bounded independently of total transfer size',()=>{
+ assert.throws(()=>parseGeminiFrames('['+' '.repeat(geminiStreamLimits.frameCharacters)),(e:any)=>e.state==='unknown'&&e.diagnostic.limitKind==='frame');
+ assert.throws(()=>parseGeminiFrames(frame('字'.repeat(geminiStreamLimits.answerCharacters+1))),(e:any)=>e.state==='unknown'&&e.diagnostic.limitKind==='answer');
+});
+
+test('a local answer limit cancels the submitted stream, keeps drafts and records an unknown result without retry',async()=>{
+ let posts=0,cancelled=false;const jobs:any[]=[];
+ const fetcher:typeof fetch=async(_url,init)=>{if(init?.method!=='POST')return new Response('boq_gemini-web-uiserver_20261013.29_p0');posts++;
+  return new Response(new ReadableStream({start(c){c.enqueue(new TextEncoder().encode(frame('字'.repeat(geminiStreamLimits.answerCharacters+1))+'\n'));},cancel(){cancelled=true;}}));};
+ const input=region('1');input.translation='';
+ await assert.rejects(geminiTranslate([input],defaults,'limit-fixture',undefined,async j=>{jobs.push(j);},(prompt,signal)=>anonymousGemini(prompt,signal,fetcher)),(e:any)=>e.state==='unknown'&&e.partial[0].translation==='');
+ assert.equal(posts,1);assert(cancelled);assert.equal(jobs.at(-1).status,'unknown');assert.equal(jobs.at(-1).diagnostic.cause,'response_limit');assert(jobs.at(-1).diagnostic.receivedBytes>0);assert.equal(input.source,'こんにちは');
+});
+
+test('malformed frames after a valid snapshot fail instead of applying that partial answer',()=>{
+ assert.throws(()=>parseGeminiFrames(frame('部分答案')+'\n'+frame('後續答案').slice(0,-3)),/串流分段格式不完整/);
 });
 test('batching enforces reading order, region count and Unicode source budget',()=>{
  const input=Array.from({length:25},(_,n)=>region(String(n)));assert.deepEqual(translationBatches(input).map(g=>g.length),[24,1]);
