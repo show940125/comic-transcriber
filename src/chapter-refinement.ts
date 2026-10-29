@@ -44,7 +44,7 @@ export async function refineChapter(pages:PageData[],settings:Settings,signal?:A
     const contextKey=await refinementContext(settings,direct);
     output.forEach((p,index)=>{p.regions=p.regions.map(r=>{const text=texts.get(ids.get(`${index}:${r.id}`)!);if(text===undefined)return r;if(text!==r.translation)changed++;return {...r,initialTranslation:direct?r.initialTranslation:r.initialTranslation??r.translation,translation:text};});p.refinement={fingerprint,contextKey,at:Date.now(),provider:'gemini-web',promptVersion:refinementVersion,mode:direct?'direct':'refine'};});
     const outputFingerprint=await chapterFingerprint(output);for(const page of output)page.refinement!.outputFingerprint=outputFingerprint;
-    await record?.({...job,status:'complete',finishedAt:Date.now(),response:response.text.slice(0,24000),raw:response.raw.slice(0,24000),rawTruncated:response.raw.length>24000,model:'網站自動選擇',build:response.build});
+    await record?.({...job,status:'complete',finishedAt:Date.now(),response:response.text.slice(0,24000),raw:response.raw.slice(0,24000),rawTruncated:response.rawTruncated??response.raw.length>24000,diagnostic:response.diagnostic,model:'網站自動選擇',build:response.build});
     return {pages:output,fingerprint,changed,regions:expected.length};
   }catch(error){await record?.({...job,status:error instanceof GeminiFailure?error.state:signal?.aborted?'cancelled':'failed',finishedAt:Date.now(),error:String(error),diagnostic:(error as any)?.diagnostic});throw error;}
 }
