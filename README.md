@@ -2,7 +2,7 @@
 
 把網頁上的日文漫畫翻成繁體中文。墨譯是 Chrome／Edge 擴充套件，會偵測文字框、辨識日文、翻譯，再把譯文放回圖片。整章依序處理，每張完成就顯示在原網頁，閱讀時可以隨時切回原圖。
 
-目前 `main` 的原始碼版本為 **0.1.17**。GitHub [最新 Release](https://github.com/show940125/comic-transcriber/releases/latest) 仍為 **0.1.15**，0.1.16 的 OCR 優化與 0.1.17 的 Gemini 長串流修正已合併原始碼，尚未提供新版 Release 附件（2026-11-04 查核）。要使用下列新功能，請由目前原始碼建置。墨譯採 Manifest V3，核心程式以 Apache-2.0 授權。
+目前版本為 **0.1.17**，已於 2026-11-04 發布。可從 [最新 Release](https://github.com/show940125/comic-transcriber/releases/latest) 下載含預設 OCR 權重的離線套件，也可由 `main` 原始碼建置。墨譯採 Manifest V3，核心程式以 Apache-2.0 授權。
 
 0.1.16 起預設使用 INT8 MangaOCR 與自動 WASM 多執行緒；工作台可單框重辨、比較全精度候選、手動畫線拆框。0.1.17 修正長章節 Gemini 串流被本機大小限制中止的問題。詳細變更見 [版本更新日誌](CHANGELOG.md)。
 

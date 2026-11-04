@@ -1,6 +1,6 @@
 # 0.1.17：Gemini 長章節串流大小修正
 
-原始碼已經 [PR #2](https://github.com/show940125/comic-transcriber/pull/2) 合併。GitHub 最新 Release 仍為 0.1.15（2026-11-04 查核）；本報告記錄 0.1.17 的本機套件、隔離回歸與使用者 Chrome 驗收。
+原始碼已經 [PR #2](https://github.com/show940125/comic-transcriber/pull/2) 合併，[0.1.17 Release](https://github.com/show940125/comic-transcriber/releases/tag/v0.1.17) 於 2026-11-04 發布。本報告記錄同一套件的本機驗證、隔離回歸與使用者 Chrome 驗收。
 
 2026-10-29。使用者提供的 Rawkuma《Isekai Kenkokuki》第 1 話，Chrome 現場顯示 19/19 張已呈現、二段校正失敗，原有譯文保留；錯誤為 `GeminiFailure: Gemini 回覆超過大小限制`。現場唯讀截圖及可見狀態保存在本機 `artifacts/gemini-size-limit/live-before.*`，未重送原請求。
 
@@ -34,4 +34,4 @@ node scripts/gemini-stream-regression.mjs msedge
 
 使用者確認重載 0.1.17、刷新及啟用後，由指定 Terra 6.1／medium 子智慧體在原 Chrome 分頁點擊一次「翻譯本頁漫畫」。現場從已保存的初譯重新呈現 19 頁，完成該次整章二段校正，工具列顯示 **19/19 張、147 個區域、修改 139 處**，校正後繁中可見，沒有再次提交。截圖、狀態及操作時間保存在本機 `live-after.json`、`live-after.png`、`live-after.md`。這是原失敗章節的真實流程修復證據；修改數不是人工品質分數。原次與此次真實串流大小未直接取得，與隔離測試的位元組計數分開。
 
-本機離線套件 `dist/comic-transcriber-0.1.17-offline-vision.zip`，155,870,157 bytes，SHA-256 `911ccc88346fe7a460570302288aa0de184985c9d4f8a6773b33ecea9b78dbc2`；54 項全部 CRC 及建置逐檔一致。公開 GitHub Release 仍另行處理。
+離線套件 `comic-transcriber-0.1.17-offline-vision.zip`，155,870,157 bytes，SHA-256 `911ccc88346fe7a460570302288aa0de184985c9d4f8a6773b33ecea9b78dbc2`；54 項全部 CRC 及建置逐檔一致。Release 附件與此已驗證本機套件使用相同雜湊，另附 `SHA256.txt` 供下載後核對。
