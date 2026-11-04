@@ -1,5 +1,7 @@
 # 0.1.17：Gemini 長章節串流大小修正
 
+原始碼已經 [PR #2](https://github.com/show940125/comic-transcriber/pull/2) 合併。GitHub 最新 Release 仍為 0.1.15（2026-11-04 查核）；本報告記錄 0.1.17 的本機套件、隔離回歸與使用者 Chrome 驗收。
+
 2026-10-29。使用者提供的 Rawkuma《Isekai Kenkokuki》第 1 話，Chrome 現場顯示 19/19 張已呈現、二段校正失敗，原有譯文保留；錯誤為 `GeminiFailure: Gemini 回覆超過大小限制`。現場唯讀截圖及可見狀態保存在本機 `artifacts/gemini-size-limit/live-before.*`，未重送原請求。
 
 錯誤文字直接來自 `src/gemini-web.ts` 的本機判斷：將所有串流片段累加到一個字串，超過 2,000,000 個 JavaScript 字元即中止。這個數值限制的是整條原始串流，並非最終譯文字數或 Gemini 的模型 token 上限。

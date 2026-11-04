@@ -1,5 +1,7 @@
 # 開發與模型部署
 
+本文對應 `main` 的 0.1.17 原始碼。GitHub 最新可下載 Release 仍為 0.1.15（2026-11-04 查核）；要建置 INT8／KV OCR 與長串流修正版，請使用目前分支。歷史量測保留版本及環境，與現行設定分開判讀。
+
 ## 建置環境
 
 瀏覽器擴充套件使用 Node.js 24、npm 與 Chrome／Edge。Python 工具以 3.14 開發；OCR 本機服務依賴 ONNX Runtime、NumPy 與 Pillow，版本列於 `requirements.txt`。
@@ -30,17 +32,21 @@ python scripts/verify-delivery.py
 
 這組命令接在 `npm run build` 後執行。下載程式核對權重雜湊，stage 程式將 detector 與 Manga-OCR 放入 `.output/chrome-mv3/models`；重新建置會移除 staged 權重，需再次 stage。ZIP 位於 `dist/`，完整性核對結果寫入本機 `artifacts/`。
 
-0.1.16 起預設內建約 111.4 MiB 的 INT8 MangaOCR 權重，完整套件另含偵測器、WASM 與字型；最終 ZIP 大小以交付收據為準。全精度模式另行下載。Google 翻譯仍需網路；完全離線翻譯需先準備 Chrome 語言包、WebLLM 權重或本機模型服務。瀏覽器快取與開發工具下載的模型各自獨立。
+0.1.16 起，離線打包只加入預設 INT8 MangaOCR 權重，含字表約 111.4 MiB；偵測器、WASM 與字型另計。全精度 KV 模式約 421.5 MiB，首次選用時另行下載。一般建置的權重仍由瀏覽器按需取得，ZIP 大小以該次交付收據為準。Google 翻譯仍需網路；完全離線翻譯需先準備 Chrome 語言包、WebLLM 權重或本機模型服務。瀏覽器快取與開發工具下載的模型各自獨立。
 
 ### OCR 模式與候選校正
 
-預設 INT8 使用一般 greedy decoder；全精度模式使用已驗證的 KV decoder。INT8 encoder 搭配浮點或量化 KV 的組合未達本輪速度門檻，保留為研究候選。設定頁選擇模式後，下載按鈕只準備該模式與偵測器。開發工具可用 `python scripts/download-vision.py --profile fp32` 取得全精度模式；既有 Python 服務需要一般全精度 decoder 時使用 `--profile all`。
+`ocrProfile` 為 `int8`（預設）或 `fp32`。INT8 使用一般 greedy decoder；全精度使用 KV decoder。兩套均為 MangaOCR，選定模式後各自完成辨識。INT8 encoder 搭配浮點或量化 KV 的組合未達速度門檻，保留為研究候選。設定頁的「下載模型供離線使用」只準備所選 OCR 模式與偵測器；若選擇 WebLLM，也會準備該翻譯模型。開發工具可用 `python scripts/download-vision.py --profile fp32` 取得全精度 KV；Python OCR 服務仍使用一般全精度 decoder，須改用 `--profile all`。
 
 WASM 自動使用 CPU 邏輯執行緒數的一半，最多 4 緒、至少 1 緒；缺少跨來源隔離或 SharedArrayBuffer 時使用 1 緒。設定可明確指定 1／2／4；實際 pthread 與降級原因在資源管理頁查閱。模型與後端切換沿用單 Worker 佇列，等待既有工作完成後釋放前一套 OCR session；閒置 60 秒後釋放整個推論文件。
 
 工作台選取文字框後可只重辨該框、使用另一模式比較，再選擇候選套用。原裁圖、目前原文與最多兩份候選並列；另一模式第一次使用可能需要下載模型，介面顯示大小。偵測分數與 OCR 信心各別標示，沒有辨識信心時顯示未提供。畫線拆框先預覽方向與子框，套用後可撤銷；新子框需重新辨識。
 
 每份候選保存權重／decoder／前處理身分與實際後端；套用不同原文只清除該框舊譯文及章節校正指紋。舊版結果須從 legacy 入口明確載入，保留原身分；採用新 OCR 後使用新快取身分。校正 JSON 維持 schema 1，可選候選欄位經白名單重建，最多兩份；私人 Reader 與網站工作台隔離規則維持。
+
+單框比較先保留目前原文與譯文；整張 OCR 重辨沿用清除該張譯文與候選的流程。畫線拆框產生新的待辨識子框，套用與撤銷也處理章節校正指紋。`score` 是偵測分數；MangaOCR 未提供辨識信心時不補造數值。
+
+快取使用 `pipeline-4-ocr-identity`，納入 profile、固定權重雜湊、decoder 與前處理身分；執行緒數留作診斷，不改變結果快取身分。legacy 與不同模型結果分開保存，共用最多 30 份頁面保留額度。模型選擇與逐框實驗見 [OCR 優化與驗收](ocr-optimization.md)。
 
 ## 資料流
 
@@ -49,6 +55,7 @@ WASM 自動使用 CPU 邏輯執行緒數的一半，最多 4 緒、至少 1 緒�
 | 翻譯模式 | 送出的資料 | 執行位置 |
 |---|---|---|
 | Google 網頁翻譯 | OCR 對白文字 | 固定 Google HTTPS 端點 |
+| 匿名 Gemini 直譯／二段校正 | 整章 OCR 原文、選用的初譯／目前譯文、術語與作品上下文 | Gemini 匿名網站端點 |
 | Chrome Translator API | 初始化時下載語言包；翻譯在本機執行 | 瀏覽器 |
 | WebLLM | 初次下載模型權重；翻譯在本機執行 | WebGPU |
 | 本機翻譯／OCR 服務 | 對白文字／圖片及區域資料 | 設定的 loopback 服務 |
@@ -61,7 +68,7 @@ WASM 自動使用 CPU 邏輯執行緒數的一半，最多 4 緒、至少 1 緒�
 
 `src/correction-import.ts` 在背景記憶體管理 10 分鐘工作階段，綁定來源 tab／frame／document／網址、工作台 ID、圖片雜湊及尺寸與匯入 tab／精確網址。交付使用 runtime 訊息；接收端再次驗證資料、原圖元素與工作台存活狀態，完成保存及重排後回覆。成功即消耗工作階段，失敗或回覆未知禁止重送。關閉、換圖、導覽與背景重啟採失效處理。
 
-獨立工作台以 `contentSignature(settings, 'private')` 包裝既有 model key，`sessionData` 持續保留此識別。公開工作台的 key 與儲存 schema 維持原狀；新私人校正不會透過相同圖片雜湊的網站快取讀回。舊共用資料無法判定來源，保留原狀並由使用者管理，獨立工作台不自動沿用。安全界線與回歸方式見 [安全邊界](security.md)。
+獨立工作台以 `contentSignature(settings, 'private')` 包裝模型快取身分，`sessionData` 持續保留此識別。網站工作台與獨立工作台均使用新的 OCR 模型身分，但私人 scope 分開；相同圖片雜湊無法讓網站工作台讀回新私人校正。校正 JSON 維持 schema 1，可選 OCR 候選欄位經白名單重建。舊共用資料無法判定來源，保留並由使用者管理，獨立工作台不自動沿用。安全界線與回歸方式見 [安全邊界](security.md)。
 
 ### GPU 探測與字形白底
 
@@ -89,7 +96,7 @@ OCR 預設 WASM；由 0.1.0–0.1.8 更新時，舊設定的 `ocrProvider: auto`
 
 設定頁直接從按鈕呼叫 `Translator.create()`，保留首次下載需要的使用者操作。另用 `Translator.availability({sourceLanguage:'ja',targetLanguage:'zh-Hant'})` 檢查未支援、待下載、下載中及就緒。實際章節翻譯透過 `native-translate` 訊息交給 offscreen 文件的共用 Translator，其佇列與 OCR Worker 分開。設定頁與推論文件的就緒狀態分別確認；不可用時回報原因。
 
-Chrome Translator 使用專用翻譯模型，官方列有日文與繁中。Gemini Nano 的 Prompt API 為通用模型介面，目前官方輸出語言列表尚未包含中文；Chrome 側欄 Gemini 的私人介面限制給元件擴充套件。本版採 Translator，來源見 [Translator API](https://developer.chrome.com/docs/ai/translator-api)、[Prompt API](https://developer.chrome.com/docs/ai/prompt-api) 及 [Chromium 權限定義](https://chromium.googlesource.com/chromium/src/+/main/chrome/common/extensions/api/_permission_features.json)。
+本專案的瀏覽器本機翻譯使用專用 [Translator API](https://developer.chrome.com/docs/ai/translator-api)，以 `ja` → `zh-Hant` 呼叫 `availability()` 檢查當前瀏覽器是否支援，再由使用者操作啟動語言包準備。[Gemini Nano 的 Prompt API](https://developer.chrome.com/docs/ai/prompt-api) 是另一套通用模型介面，尚未整合至本專案；也未使用 Chrome 側欄 Gemini 的私人介面。API 的語言、硬體及版本條件以官方文件和實際可用性檢查為準。
 
 ## 本機服務
 
@@ -101,11 +108,13 @@ Chrome Translator 使用專用翻譯模型，官方列有日文與繁中。Gemin
 Set-Location -LiteralPath 'C:\path\to\comic-transcriber'
 uv venv --python 3.14
 uv pip install --python '.\.venv\Scripts\python.exe' -r '.\requirements.txt'
-& '.\.venv\Scripts\python.exe' '.\scripts\download-vision.py'
+& '.\.venv\Scripts\python.exe' '.\scripts\download-vision.py' --profile all
 & '.\.venv\Scripts\python.exe' '.\backend\server.py'
 ```
 
 服務預設綁定 `127.0.0.1:8766`。在擴充套件設定中啟用「獨立本機 ONNX OCR 服務」。服務核對來源及圖片／文字框邊界，不持久保存圖片。
+
+此服務讀取 `.cache/models/manga-ocr/encoder_model.onnx` 與 `decoder_model.onnx`，使用 FP32 一般解碼；插件中的 INT8／KV 模式由瀏覽器 Worker 實作。只下載預設 INT8，無法滿足這個既有 Python 服務的模型路徑。
 
 ### 本機翻譯
 
@@ -125,6 +134,15 @@ npm run native:assets
 npm run typecheck
 npm test
 ```
+
+與目前模型及長串流有關的結果分別見 [0.1.16 OCR 驗收](ocr-optimization.md) 與 [0.1.17 修正](research-0.1.17.md)。後者的隔離擴充功能測試可用以下命令重現，回覆採原創 fixture，不向 Gemini 發送真正翻譯請求：
+
+```powershell
+node scripts/gemini-stream-regression.mjs chromium
+node scripts/gemini-stream-regression.mjs msedge
+```
+
+需先建置套件並備妥對應瀏覽器。測試涵蓋 background → offscreen → 串流解析 → 紀錄保存、二段校正與直譯，以及超限後取消讀取及結果未知鎖定；報告在本機 `artifacts/gemini-size-limit/`。
 
 單元測試涵蓋偵測後處理、端點限制、翻譯重試與取消、部分譯文續翻、快取相容及人工評分計算。瀏覽器章節回歸需要建置含 OCR 權重的套件、Python 測試依賴、Chromium 及原創合成圖片；圖片產生器使用 Windows Yu Gothic 字型。
 
@@ -225,3 +243,21 @@ Manifest 的 required host permissions 為 `http://*/*` 與 `https://*/*`。背�
 文字回覆全部驗證後，先保存全部頁面，再開始 PNG 重排。已保存的結果指紋與目前呈現指紋分開；重排中斷時，下次沿用已驗證結果重新呈現。診斷紀錄接受最多 400,000 字元（包含 JSON 再次跳脫），足以容納 120 KB 輸入與各 24,000 字元的 response/raw 摘錄。
 
 瀏覽器回歸：`node scripts/chapter-direct-regression.mjs`。使用原創合成圖片、預存 OCR 及匿名協定回覆 fixture，不發送真正翻譯請求；報告置於本機 `artifacts/regression-0.1.14/`。
+
+## 0.1.17 Gemini 串流解析
+
+`anonymousGemini` 每次建立獨立匿名文字請求，不帶上次對話 ID，並使用 `credentials: omit`。章節上下文由當次提示中的原文、初譯、術語與摘要提供；格式修正另發一次請求，附上已完成回覆及預期 ID。初始化限 20 秒，每次 POST 限 180 秒。
+
+舊版累加整條 raw 回覆，超過 2,000,000 個 JavaScript 字元就中止。累積快照會重複包含先前答案，傳輸總量可遠大於最後譯文。0.1.17 改用逐行 RPC parser，消耗一段後便丟棄，只留尚未完成的單段、最新答案及有界診斷摘錄。
+
+| 界限／紀錄 | 現行值與用途 |
+|---|---|
+| 章節輸入 | 最多 60 頁、800 個可輸出區域、120,000 UTF-8 bytes |
+| 單段 frame | 16,777,216 個 JavaScript 字元 |
+| 最新候選答案 | 2,000,000 個 JavaScript 字元 |
+| 原始串流摘錄 | 最多 24,000 字元，另存 `rawTruncated` |
+| 串流診斷 | `receivedBytes`、`receivedCharacters`、`frames`、`peakFrameCharacters`、`answerCharacters`、`rawExcerptCharacters` |
+
+單段及答案限制用來控制保留資料；整條傳輸不再使用舊的累積字元上限。中途因讀取、取消或本機限制失敗時，記為 `unknown`、取消 reader 並保存相同輸入鎖定，保留原 OCR 與譯文。只有完整且通過全部區域 ID 驗證的答案會套用。
+
+舊版把本機大小錯誤寫成協定受阻時，僅在本機已有 30/30 完成證據的情況下恢復協定通過狀態；HTTP 403／429 及缺少證據仍受阻，未知輸入鎖定也持續有效。機制、真實章節驗收與限制見 [0.1.17 紀錄](research-0.1.17.md)。

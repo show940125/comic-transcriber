@@ -8,10 +8,10 @@
 
 ```powershell
 npm run storage:report
-npm run storage:clean -- --apply
+npm run storage:clean
 ```
 
-兩個命令預設均為唯讀預覽；只有 `--apply` 會刪除列出的可重建資料。操作前先保存清單，逐項記錄結果，報告位於本機 `artifacts/storage-cleanup/`。刪除後需要舊套件或原始語料時，須重新取得。
+兩個命令預設均為唯讀預覽。確認清單後，執行 `npm run storage:clean -- --apply` 才會刪除列出的可重建資料。操作先保存清單，再逐項記錄結果，報告位於本機 `artifacts/storage-cleanup/`。刪除後需要舊套件或原始語料時，須重新取得。
 
 清理範圍：
 
@@ -25,6 +25,14 @@ npm run storage:clean -- --apply
 
 一般自動化測試使用新建的隔離設定檔，關閉瀏覽器完成後清理；測試報告、截圖及匯出結果獨立保存。設定檔的收尾結果另存於 `artifacts/test-profile-lifecycle/`，包含啟動及關閉失敗。啟動失敗也會嘗試清理；瀏覽器未完成關閉或目錄仍被占用時保留，交由容量檢查列出。Chrome 語言包基準重用指定設定檔。
 
-`npm run package` 先驗證新 ZIP 的 CRC、manifest 版本及必要檔案，再發布套件，依數值版本保留最新兩版及兩者的 `SHA256.txt`。淘汰的版本、大小與雜湊記錄在本機 `artifacts/release-history.json`，避免持續累積大型舊 ZIP。
+`npm run package` 先驗證新 ZIP 的 CRC、manifest 版本及必要檔案，再寫入本機 `dist/`，依數值版本保留最新兩版及兩者的 `SHA256.txt`。淘汰的版本、大小與雜湊記錄在本機 `artifacts/release-history.json`。此命令只產生本機套件；GitHub Release 的建立與附件上傳另行執行。
 
 目前安裝的擴充套件使用 `.output/chrome-mv3`，清理時保留此目錄。重新建置會改寫該目錄，屬於獨立開發操作。
+
+## 插件中的模型與頁面快取
+
+預設離線套件包含 INT8 MangaOCR 與偵測器，FP32 KV 按需下載。切換模式不會自動刪除已下載的模型；不再使用的模型可從插件「快取與資源管理」清除。模型磁碟快取、套件內建資源與執行中的 session 各自計量；60 秒閒置釋放的是推論資源，已下載權重仍可供下次載入。
+
+0.1.16 起，頁面快取加入模型、decoder 及前處理身分。舊版、不同模型、Google 初譯與 Gemini 直譯分開保存，合計最多 30 份；同圖的不同模式結果也會占用額度。legacy 入口讓使用者明確載入舊結果，新私人 Reader 與網站工作台互不讀取私人資料。刪除頁面項目也會刪除該項原文、譯文、人工校正與 OCR 候選，建議先匯出要保留的校正 JSON。
+
+Gemini 的串流暫存與頁面快取分開。0.1.17 解析當次串流後只保留最新答案及有界診斷摘錄；已完成的頁面文字按上述保留規則保存。診斷中的累計接收量與磁碟快取大小不同。
