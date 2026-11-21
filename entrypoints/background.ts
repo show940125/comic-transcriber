@@ -1,16 +1,21 @@
 import { defineBackground } from 'wxt/utils/define-background';
 import { publicImageUrl } from '../src/core';
 import { imageBase64 } from '../src/binary';
-import {cachePageDirect,storageWrite} from '../src/storage';
+import {cachePageDirect,replaceCachedPageDirect,undoCachedPageDirect,storageWrite} from '../src/storage';
 import {inventory,scanCaches,removeCache,recordKey} from '../src/cache-inventory';
 import {importCorrection} from '../src/core';
 import {SerialLane,ResourceSlots} from '../src/scheduling';
-import type {Settings} from '../src/types';
+import type {PageData,Settings} from '../src/types';
 import {geminiOrigin} from '../src/gemini-web';
 import {geminiProtocolPassed} from '../src/gemini-validation';
 import {waitForOffscreenReady} from '../src/offscreen-ready';
 import {specificSites} from '../src/site-access';
 import {installCorrectionImports} from '../src/correction-import';
+function validPageKey(value:any){return typeof value?.hash==='string'&&/^[a-f0-9]{64}$/.test(value.hash)&&typeof value.modelKey==='string'&&value.modelKey.length<=5000;}
+function validateCachedPage(page:any):asserts page is PageData{
+  if(!validPageKey(page)||page.schema!==1||!Number.isFinite(page.width)||!Number.isFinite(page.height)||page.width*page.height>30_000_000)throw new Error('頁面快取格式錯誤');
+  importCorrection(page,page.hash,page.width,page.height);
+}
 export default defineBackground(() => {
   let creating: Promise<void> | undefined;
   let closing:Promise<void>|undefined,maintenance=false,releaseRequested=false,geminiValidationRunning=false;
@@ -28,7 +33,7 @@ export default defineBackground(() => {
   const googleLane=new SerialLane(),googleAborts=new Map<string,AbortController>();let lastGoogleStart=0;
   let googleBlocked=0,googleBlockLoaded=false;
   const imageSlots=new ResourceSlots(2);
-  chrome.tabs.onRemoved.addListener(tabId=>{imageSlots.releaseOwner(tabId);for(const [id,owner]of pageLeaseOwners)if(owner===tabId){leases.delete('image:'+id);pageLeaseOwners.delete(id);}void syncBusy().catch(()=>{});for(const [id,owner]of owners)if(owner.tabId===tabId)void chrome.runtime.sendMessage({channel:'offscreen-cancel',id}).catch(()=>{});});
+  chrome.tabs.onRemoved.addListener(tabId=>{void chrome.storage.session.remove(['toolsHidden:'+tabId,'chapterMode:'+tabId]).catch(()=>{});imageSlots.releaseOwner(tabId);for(const [id,owner]of pageLeaseOwners)if(owner===tabId){leases.delete('image:'+id);pageLeaseOwners.delete(id);}void syncBusy().catch(()=>{});for(const [id,owner]of owners)if(owner.tabId===tabId)void chrome.runtime.sendMessage({channel:'offscreen-cancel',id}).catch(()=>{});});
   async function offscreen() {
     if(closing)await closing;
     creating ??= (async()=>{
@@ -90,7 +95,14 @@ export default defineBackground(() => {
         }finally{if(validating)geminiValidationRunning=false;owners.delete(id);done();}
       };task().then(reply,e=>reply({ok:false,error:String(e)}));return true;
     }
-    if(message.channel==='tab-tools-state'){const tabId=sender.tab?.id??message.tabId;chrome.storage.session.get('toolsHidden:'+tabId).then(data=>reply({ok:true,hidden:data['toolsHidden:'+tabId]===true}),e=>reply({ok:false,error:String(e)}));return true;}
+    if(message.channel==='tab-tools-state'){
+      const tabId=sender.tab?.id??message.tabId,hidden='toolsHidden:'+tabId,mode='chapterMode:'+tabId;
+      chrome.storage.session.get([hidden,mode]).then(data=>reply({ok:true,hidden:data[hidden]===true,chapterMode:data[mode]}),e=>reply({ok:false,error:String(e)}));return true;
+    }
+    if(message.channel==='tab-chapter-mode'){
+      if(sender.tab?.id==null||!['standard','gemini-direct'].includes(message.mode)){reply({ok:false,error:'分頁模式不合法'});return;}
+      chrome.storage.session.set({['chapterMode:'+sender.tab.id]:message.mode}).then(()=>reply({ok:true}),e=>reply({ok:false,error:String(e)}));return true;
+    }
     if(message.channel==='tab-tools-visibility'){(async()=>{await chrome.storage.session.set({['toolsHidden:'+message.tabId]:message.hidden===true});try{return await chrome.tabs.sendMessage(message.tabId,{channel:'tools-visibility',hidden:message.hidden===true});}catch{if(message.hidden)return {ok:true};await activate(message.tabId);return chrome.tabs.sendMessage(message.tabId,{channel:'tools-visibility',hidden:false});}})().then(reply,e=>reply({ok:false,error:String(e)}));return true;}
     if(message.channel==='pause-page'){chrome.tabs.sendMessage(message.tabId,{channel:'pause-tools'}).then(reply,e=>reply({ok:false,error:String(e)}));return true;}
     if(message.channel==='activate-page'){chrome.storage.session.set({['toolsHidden:'+message.tabId]:false}).then(()=>activate(message.tabId)).then(()=>chrome.tabs.sendMessage(message.tabId,{channel:'tools-visibility',hidden:false})).then(()=>reply({ok:true}),e=>reply({ok:false,error:String(e)}));return true;}
@@ -117,13 +129,34 @@ export default defineBackground(() => {
     if(message.channel==='image-slot-cancel'){imageSlots.cancelWaiting(message.id);reply({ok:true});return;}
     if(message.channel==='cache-page'){
       if(maintenance){reply({ok:false,error:'快取維護中，請稍後儲存'});return;}
-      const task=async()=>{const page=message.page;if(!page||page.schema!==1||typeof page.hash!=='string'||!/^[a-f0-9]{64}$/.test(page.hash)||typeof page.modelKey!=='string'||page.modelKey.length>5000||!Number.isFinite(page.width)||!Number.isFinite(page.height)||page.width*page.height>30_000_000)throw new Error('頁面快取格式錯誤');importCorrection(page,page.hash,page.width,page.height);await cachePageDirect(page);return {ok:true};};
+      const task=async()=>{
+        if(message.undo){
+          const receipt=message.undo;
+          if(!validPageKey(receipt)||typeof receipt.editVersion!=='string'||!/^[-a-f0-9]{36}$/.test(receipt.editVersion))throw new Error('撤銷資料格式錯誤');
+          if(receipt.previous){
+            validateCachedPage(receipt.previous);
+            if(receipt.previous.hash!==receipt.hash||receipt.previous.modelKey!==receipt.modelKey)throw new Error('撤銷只能還原原快取項目');
+          }
+          await undoCachedPageDirect(receipt);return {ok:true};
+        }
+        const page=message.page;validateCachedPage(page);
+        if(message.rememberPrevious===true){
+          if(!page.editVersion||!/^[-a-f0-9]{36}$/.test(page.editVersion))throw new Error('校正版號格式錯誤');
+          return {ok:true,receipt:await replaceCachedPageDirect({...page,editVersion:page.editVersion})};
+        }
+        await cachePageDirect(page);return {ok:true};
+      };
       task().then(reply,error=>reply({ok:false,error:String(error)}));return true;
     }
     if(message.channel==='progress'){
       const owner=owners.get(message.id);if(owner)void chrome.tabs.sendMessage(owner.tabId,message,{frameId:owner.frameId}).catch(()=>{});return;
     }
-    if(message.channel==='open-options'){void chrome.runtime.openOptionsPage();reply({ok:true});return;}
+    if(message.channel==='open-options'){
+      if(message.section==='gemini'||message.section==='gemini-diagnostics'){
+        chrome.tabs.create({url:chrome.runtime.getURL('/options.html#'+message.section)}).then(()=>reply({ok:true}),e=>reply({ok:false,error:String(e)}));return true;
+      }
+      void chrome.runtime.openOptionsPage();reply({ok:true});return;
+    }
     if(message.channel==='comic-font'){
       fetch(chrome.runtime.getURL('/fonts/NotoSansCJKtc-Regular.otf')).then(async res=>{if(!res.ok)throw new Error('字型讀取失敗');return {ok:true,base64:imageBase64(new Uint8Array(await res.arrayBuffer()))};}).then(reply,error=>reply({ok:false,error:String(error)}));return true;
     }

@@ -3,6 +3,7 @@ import CacheManager from '../src/CacheManager.svelte';
 import ChapterDock from '../src/ChapterDock.svelte';
 import {draggableDock} from '../src/dock-position';
 import {IdleRuntime} from '../src/idle-runtime';
+import theme from '../src/studio-theme.css?inline';
 declare const BENCH_WORKER:string;
 const status=document.querySelector('#status')!,values:any={dockCollapsed:false},listeners=new Set<any>();
 let hidden=false,releases=0;
@@ -11,7 +12,8 @@ const fixture={pages:[{key:'page:original',title:'原創測試漫畫',hash:'exam
 mount(CacheManager,{target:document.querySelector('#manager')!});
 const holder=document.querySelector<HTMLElement>('#dock')!;
 const dockRoot=holder.attachShadow({mode:'open'});
-mount(ChapterDock,{target:dockRoot,props:{getImages:()=>[],runChapter:async()=>{},refineChapter:async()=>{status.textContent='已開啟測試校正';},onRunning:()=>{},openChapter:()=>{status.textContent='已開啟測試工作台';},toggleOriginal:()=>{status.textContent='已切換測試原圖';}}});
+const dockStyle=document.createElement('style');dockStyle.textContent=theme;dockRoot.append(dockStyle);
+mount(ChapterDock,{target:dockRoot,props:{getImages:()=>[],getActivity:()=>({total:0,readable:0,recognized:0,directReady:0,standardReady:0,googleReady:0,directRendered:0,review:0}),runChapter:async()=>{},refineChapter:async()=>{status.textContent='已開啟測試校正';},onRunning:()=>{},openChapter:()=>{status.textContent='已開啟測試工作台';},toggleOriginal:()=>{status.textContent='已切換測試原圖';}}});
 draggableDock(holder,p=>{values.dockPosition=p;document.querySelector('#position')!.textContent=JSON.stringify(p);});
 document.querySelector('#visibility')!.addEventListener('click',()=>{hidden=!hidden;holder.style.display=hidden?'none':'';status.textContent=hidden?'工具已隱藏':'工具已顯示';});
 document.querySelector('#idle')!.addEventListener('click',()=>{const idle=new IdleRuntime(()=>{releases++;status.textContent='模型已釋放（短計時 fixture）';idle.dispose();},100);idle.activity(1);idle.activity(0);});

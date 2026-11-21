@@ -22,17 +22,36 @@ export async function scanCaches(){
   for(const name of (await caches.keys()).filter(ownedCache)){const cache=await caches.open(name);for(const request of await cache.keys()){const response=await cache.match(request);if(!response)continue;const key=recordKey(name,request.url);index[key]={cache:name,url:request.url,bytes:await responseBytes(response),measuredAt:Date.now(),verified:index[key]?.verified};}}
   await chrome.storage.local.set({cacheSizeIndex:index});return inventory();
 }
-export async function removeCache(selection:{kind:'page'|'pages'|'model'|'models'|'model-group';key?:string;cache?:string;url?:string;group?:string}){
+export type CacheInventory=Awaited<ReturnType<typeof inventory>>;
+export type CacheSelection={kind:'page'|'pages'|'model'|'models'|'model-group';key?:string;cache?:string;url?:string;group?:string;expected?:string[]};
+function checkRemovalScope(expected:string[]|undefined,actual:string[]){
+  if(expected&&(!Array.isArray(expected)||expected.length!==actual.length||actual.some(key=>!expected.includes(key)))){
+    throw new Error('快取清單已變更，請重新計量並確認刪除範圍');
+  }
+}
+export async function removeCache(selection:CacheSelection){
   if(!selection||!['page','pages','model','models','model-group'].includes(selection.kind))throw new Error('快取刪除範圍不合法');
   if(selection.kind==='page'&&!selection.key?.startsWith('page:'))throw new Error('頁面快取索引不合法');
   if(selection.kind==='model'&&(!selection.cache||!ownedCache(selection.cache)||!selection.url))throw new Error('模型快取索引不合法');
   if(selection.kind==='model-group'&&!selection.group)throw new Error('模型群組不合法');
   if(selection.kind==='page'||selection.kind==='pages'){
     const all=await chrome.storage.local.get(null),keys=Object.keys(all).filter(k=>k.startsWith('page:')&&(selection.kind==='pages'||k===selection.key));
+    checkRemovalScope(selection.expected,keys);
     await chrome.storage.local.remove(keys);const {pageKeys=[]}=await chrome.storage.local.get('pageKeys');await chrome.storage.local.set({pageKeys:(pageKeys as string[]).filter(k=>!keys.includes(k))});
   }else{
     const {cacheSizeIndex={}}=await chrome.storage.local.get('cacheSizeIndex'),index=cacheSizeIndex as Record<string,CacheRecord>;
-    for(const name of (await caches.keys()).filter(ownedCache)){if(selection.kind==='model'&&selection.cache!==name)continue;const cache=await caches.open(name);for(const request of await cache.keys()){if(selection.kind==='model'&&selection.url!==request.url)continue;if(selection.kind==='model-group'&&selection.group!==modelGroup(name,request.url).id)continue;await cache.delete(request);delete index[recordKey(name,request.url)];}}
+    const targets:{cache:Cache;request:Request;key:string}[]=[];
+    for(const name of (await caches.keys()).filter(ownedCache)){
+      if(selection.kind==='model'&&selection.cache!==name)continue;
+      const cache=await caches.open(name);
+      for(const request of await cache.keys()){
+        if(selection.kind==='model'&&selection.url!==request.url)continue;
+        if(selection.kind==='model-group'&&selection.group!==modelGroup(name,request.url).id)continue;
+        targets.push({cache,request,key:recordKey(name,request.url)});
+      }
+    }
+    checkRemovalScope(selection.expected,targets.map(target=>target.key));
+    for(const {cache,request,key} of targets){await cache.delete(request);delete index[key];}
     await chrome.storage.local.set({cacheSizeIndex:index});
   }
   return inventory();

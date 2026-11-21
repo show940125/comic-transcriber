@@ -1,0 +1,90 @@
+.moyu {
+  --mx-paper: #fcfbf7;
+  --mx-surface: #fff;
+  --mx-canvas: #e8ede5;
+  --mx-ink: #1b3329;
+  --mx-muted: #4c6056;
+  --mx-green: #204f3d;
+  --mx-hover: #eaf2e9;
+  --mx-tint: #eff4eb;
+  --mx-border: #afc1b4;
+  --mx-line: #d7e2d7;
+  --mx-shadow: 0 2px 4px #1b332909, 0 12px 26px #1b332913;
+  --mx-review: #714414;
+  --mx-review-bg: #fff1d9;
+  --mx-danger: #8f3327;
+  --mx-danger-bg: #fff1eb;
+  color: var(--mx-ink);
+  font: 14px/1.55 system-ui, "Microsoft JhengHei", sans-serif;
+}
+.moyu, .moyu :where(*) { box-sizing: border-box; }
+.moyu :where(button, input, select, textarea) { font: inherit; }
+.moyu :where(button, .mx-button) {
+  min-height: 36px;
+  padding: 6px 11px;
+  border: 1px solid var(--mx-border);
+  border-radius: 7px;
+  background: var(--mx-surface);
+  color: var(--mx-green);
+  cursor: pointer;
+}
+.moyu :where(button, .mx-button) {
+  transition: background-color 120ms ease, border-color 120ms ease, box-shadow 120ms ease;
+}
+.moyu :where(button:not(:disabled):hover, .mx-button:hover) { background: var(--mx-hover); }
+.moyu :where(button:not(:disabled):active, .mx-button:active) { box-shadow: inset 0 1px 3px #102c1c26; }
+.moyu :where(button, .mx-button).primary {
+  background: var(--mx-green);
+  border-color: var(--mx-green);
+  color: #fff;
+  font-weight: 650;
+}
+.moyu :where(button, .mx-button).primary:hover:not(:disabled) { background: #1b4332; }
+.moyu :where(button).danger { color: var(--mx-danger); }
+.moyu :where(button).danger:hover:not(:disabled) { background: var(--mx-danger-bg); }
+.moyu :where(button, select, input, textarea):disabled { opacity: .65; cursor: default; }
+.moyu :where(button, select, input, textarea, summary, a):focus-visible, .moyu .file:focus-within {
+  outline: 2px solid #1e674a;
+  outline-offset: 2px;
+}
+.moyu :where(select, textarea, input:not([type=checkbox], [type=radio], [type=range], [type=file])) {
+  border: 1px solid var(--mx-border);
+  border-radius: 6px;
+  padding: 7px 9px;
+  background: var(--mx-surface);
+  color: var(--mx-ink);
+}
+.moyu :where(a, summary) { color: var(--mx-green); }
+.moyu :where(summary) { cursor: pointer; }
+.moyu :where(.mx-note) { color: var(--mx-muted); overflow-wrap: anywhere; }
+.moyu :where(.mx-alert) { background: var(--mx-danger-bg); color: var(--mx-danger); border-radius: 7px; padding: 8px 12px; overflow-wrap: anywhere; }
+.moyu :where(.mx-warning) { background: var(--mx-review-bg); color: var(--mx-review); border-radius: 7px; padding: 6px 10px; overflow-wrap: anywhere; }
+.moyu :where(dialog) { color: var(--mx-ink); background: var(--mx-paper); border: 1px solid var(--mx-border); border-radius: 12px; box-shadow: var(--mx-shadow); }
+.moyu :where(dialog)::backdrop { background: #182d25a6; }
+
+.moyu .mx-segments {
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--mx-line);
+  border-radius: 9px;
+  background: var(--mx-tint);
+}
+.moyu .mx-segments button {
+  min-height: 32px;
+  min-width: 0;
+  flex: 1;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding-block: 4px;
+  background: transparent;
+}
+.moyu .mx-segments button[aria-pressed=true] {
+  background: var(--mx-surface);
+  border-color: var(--mx-line);
+  box-shadow: 0 1px 3px #1b332918;
+  font-weight: 700;
+}
+@media (prefers-reduced-motion: reduce) {
+  .moyu :where(button, .mx-button) { transition: none; }
+}

@@ -1,11 +1,11 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {cachePage,loadPage,settings,ocrReusePages,legacyPages} from '../src/storage';
+import {cachePage,loadPage,settings,ocrReusePages,legacyPages,replaceCachedPageDirect,undoCachedPageDirect} from '../src/storage';
 import {contentSignature} from '../src/core';
 import {defaults,type PageData} from '../src/types';
 function storageFixture(){
  const values:Record<string,any>=Object.create(null);
- (globalThis as any).chrome={storage:{local:{get:async(keys:string|string[])=>{const selected=Array.isArray(keys)?keys:[keys];return Object.fromEntries(selected.filter(k=>k in values).map(k=>[k,structuredClone(values[k])]));},set:async(data:Record<string,any>)=>{for(const[k,v]of Object.entries(data))values[k]=structuredClone(v);},remove:async(keys:string[])=>{for(const key of keys)delete values[key];}}}};
+ (globalThis as any).chrome={storage:{local:{get:async(keys:string|string[])=>{const selected=Array.isArray(keys)?keys:[keys];return Object.fromEntries(selected.filter(k=>k in values).map(k=>[k,structuredClone(values[k])]));},set:async(data:Record<string,any>)=>{for(const[k,v]of Object.entries(data))values[k]=structuredClone(v);},remove:async(keys:string|string[])=>{for(const key of Array.isArray(keys)?keys:[keys])delete values[key];}}}};
  return values;
 }
 function page(hash:string,modelKey:string):PageData{return {schema:1,hash,width:100,height:100,regions:[],title:'',chapter:'',glossary:'',summary:'已翻譯的對白',modelKey};}
@@ -19,6 +19,26 @@ test('old OCR results require explicit load and keep private/public separation',
 test('concurrent page saves retain both cache keys and both correction payloads',async()=>{
  const values=storageFixture(),key=contentSignature(defaults),one=page('first',key),two=page('second',key);one.summary='第一張人工校正';two.summary='第二張人工校正';
  await Promise.all([cachePage(one),cachePage(two)]);assert.equal(values.pageKeys.length,2);assert.equal((await loadPage('first',key))?.summary,one.summary);assert.equal((await loadPage('second',key))?.summary,two.summary);
+});
+test('undo removes the new model entry while keeping the original model and other pages',async()=>{
+ const values=storageFixture(),prior=page('same',contentSignature(defaults)),current=contentSignature({...defaults,ocrProfile:'fp32'});
+ const neighbor=page('other',current);
+ await cachePage(prior);await cachePage(neighbor);
+ const receipt=await replaceCachedPageDirect({...page('same',current),editVersion:crypto.randomUUID()});
+ await undoCachedPageDirect(receipt);
+ assert.equal(await loadPage('same',current),undefined);
+ assert.deepEqual(await loadPage('same',prior.modelKey),prior);
+ assert.deepEqual(await loadPage('other',current),neighbor);
+ assert.equal(values.pageKeys.length,2);
+});
+test('undo refuses to restore over newer corrections from another editor',async()=>{
+ storageFixture();const prior=page('same',contentSignature(defaults));
+ await cachePage(prior);
+ const receipt=await replaceCachedPageDirect({...prior,summary:'重辨',editVersion:crypto.randomUUID()});
+ const later={...prior,summary:'另一工作台已修正'};
+ await cachePage(later);
+ await assert.rejects(undoCachedPageDirect(receipt),/快取已更新/);
+ assert.deepEqual(await loadPage(later.hash,later.modelKey),later);
 });
 test('legacy Gemini primary selection becomes Google while enabling the separate chapter pass',async()=>{
  const values=storageFixture();values.settings={...defaults,backend:'gemini-web'};const value=await settings();assert.equal(value.backend,'google-web');assert.equal(value.refineAfterChapter,true);

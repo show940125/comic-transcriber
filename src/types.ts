@@ -22,7 +22,7 @@ export interface Region {
 export interface PageData {
   schema: 1; hash: string; width: number; height: number; regions: Region[];
   title: string; chapter: string; glossary: string; summary: string; modelKey: string;
-  sourcePageUrl?:string; imageUrl?:string; pageIndex?:number; savedAt?:number; lastAccessAt?:number;
+  sourcePageUrl?:string; imageUrl?:string; pageIndex?:number; savedAt?:number; lastAccessAt?:number; editVersion?:string;
   refinement?:{fingerprint:string;outputFingerprint?:string;contextKey?:string;at:number;provider:'gemini-web';promptVersion:number;mode?:'direct'|'refine'};
 }
 export interface Diagnostic {

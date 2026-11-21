@@ -1,1 +1,37 @@
-<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><title>墨譯</title></head><body><h1>墨譯</h1><p>日文漫畫，讀成繁體中文。</p><p id="access-state">網站存取依 Chrome 設定</p><button id="activate">啟用本頁墨譯</button><button id="visibility">隱藏／顯示本頁工具</button><button id="pause">暫停本頁並釋放模型</button><button id="cache">快取與資源管理</button><button id="reader">開啟漫畫工作台</button><button id="grant">授權所有網站與圖片 CDN</button><button id="settings">模型與閱讀設定</button><p id="status" role="status"></p><script type="module" src="./main.ts"></script><style>body{width:270px;background:#f1eee6;color:#294434;font:13px "Microsoft JhengHei",sans-serif;padding:18px}h1{font-size:32px;margin:0}button{display:block;width:100%;margin:10px 0;padding:10px;background:#fafbf7;border:1px solid #bdcbb9;border-radius:5px;color:#294434;cursor:pointer}p{line-height:1.6}</style></body></html>
+<!doctype html>
+<html lang="zh-Hant">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>墨譯</title></head>
+<body class="moyu">
+  <header><h1>墨譯</h1><p id="tab-state" class="mx-note">正在確認目前分頁…</p></header>
+  <button id="primary" class="primary" hidden></button>
+  <nav aria-label="墨譯功能">
+    <button id="reader">本機漫畫工作台</button>
+    <button id="settings">模型與閱讀設定</button>
+    <button id="cache">快取與推論資源</button>
+  </nav>
+  <details>
+    <summary>分頁與網站權限</summary>
+    <p id="access-state" class="mx-note">依 Chrome 網站存取設定</p>
+    <button id="grant">授權網站與圖片 CDN</button>
+    <button id="visibility" hidden>隱藏本頁工具列</button>
+    <button id="pause" hidden>暫停本頁並釋放模型</button>
+  </details>
+  <p id="status" role="status" hidden></p>
+  <script type="module" src="./main.ts"></script>
+  <style>
+    body { width: 312px; max-width: 100vw; margin: 0; padding: 14px 16px; background: var(--mx-paper); }
+    header { padding: 10px 12px; margin-bottom: 9px; background: var(--mx-tint); border: 1px solid var(--mx-line); border-radius: 10px; }
+    h1 { font-size: 24px; letter-spacing: .04em; line-height: 1.25; margin: 0; }
+    header p { margin-bottom: 0; }
+    p { margin: 4px 0 8px; }
+    button { width: 100%; text-align: left; }
+    button.primary { text-align: center; }
+    nav { display: grid; margin: 10px 0; padding: 2px; border: 1px solid var(--mx-line); background: var(--mx-surface); border-radius: 9px; }
+    nav button { display: flex; justify-content: space-between; align-items: center; gap: 8px; border-color: transparent; }
+    nav button::after { content: ""; width: 6px; height: 6px; flex-shrink: 0; margin-inline-end: 2px; border: solid var(--mx-muted); border-width: 1px 1px 0 0; rotate: 45deg; }
+    details { border-top: 1px solid var(--mx-line); padding-top: 7px; }
+    details button { margin-top: 5px; }
+    #status { margin: 8px 0 0; }
+  </style>
+</body>
+</html>

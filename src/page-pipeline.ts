@@ -7,8 +7,8 @@ import {googleWebTranslate} from './google-web';
 import {extensionCall,detached,contextAlive} from './extension-context';
 import {renderPage,loadFont} from './render';
 import {SerialLane,DeferredTranslationError} from './scheduling';
-export interface PageSession {blob:Blob;image:HTMLImageElement;regions:Region[];hash:string;modelKey:string;legacyModelKey?:string;config:Settings;cacheScope?:'private';metadata?:Pick<PageData,'sourcePageUrl'|'imageUrl'|'pageIndex'|'refinement'>}
-export interface PageHooks {progress?:(d:Diagnostic)=>void;partial?:(regions:Region[])=>void;beforeTranslate?:()=>Promise<void>;canTranslate?:()=>boolean;onFailure?:(error:unknown)=>void;signal?:AbortSignal;ocrOnly?:boolean}
+export interface PageSession {blob:Blob;image:HTMLImageElement;regions:Region[];hash:string;modelKey:string;legacyModelKey?:string;editVersion?:string;config:Settings;cacheScope?:'private';metadata?:Pick<PageData,'sourcePageUrl'|'imageUrl'|'pageIndex'|'refinement'>}
+export interface PageHooks {progress?:(d:Diagnostic)=>void;partial?:(regions:Region[])=>void;beforeTranslate?:()=>Promise<void>;canTranslate?:()=>boolean;onFailure?:(error:unknown)=>void;signal?:AbortSignal;ocrOnly?:boolean;persist?:boolean}
 const translationLane=new SerialLane();
 export async function loadSession(blob:Blob,config:Settings,signal?:AbortSignal):Promise<PageSession&{dispose:()=>void}>{
   if(blob.size>20*1024*1024||!blob.type.startsWith('image/'))throw new Error('請使用 20 MB 以內的圖片');
@@ -21,11 +21,13 @@ export async function loadSession(blob:Blob,config:Settings,signal?:AbortSignal)
 export function sessionData(session:PageSession):PageData{
   const {image,config}=session;session.modelKey=session.legacyModelKey??contentSignature(config,session.cacheScope);
   const page:PageData={schema:1,hash:session.hash,width:image.naturalWidth,height:image.naturalHeight,regions:structuredClone(session.regions),title:config.title,chapter:config.chapter,glossary:config.glossary,summary:session.regions.filter(r=>r.translation).map(r=>r.translation).join('\n').slice(0,1500),modelKey:session.modelKey};
-  Object.assign(page,session.metadata,{savedAt:Date.now()});return page;
+  Object.assign(page,session.metadata,{savedAt:Date.now()});if(session.editVersion)page.editVersion=session.editVersion;return page;
 }
 export async function saveSession(session:PageSession){await cachePage(sessionData(session));}
 export async function detectSession(session:PageSession,hooks:PageHooks={}){
-  session.regions=await engine({op:'detect',image:session.blob,width:session.image.naturalWidth,height:session.image.naturalHeight},hooks.progress,hooks.signal);await saveSession(session);
+  session.regions=await engine({op:'detect',image:session.blob,width:session.image.naturalWidth,height:session.image.naturalHeight},hooks.progress,hooks.signal);
+  hooks.signal?.throwIfAborted();
+  if(hooks.persist!==false){await saveSession(session);hooks.partial?.(session.regions);}
 }
 export async function ocrSession(session:PageSession,hooks:PageHooks={}){
   const conf=session.config;
@@ -35,7 +37,8 @@ export async function ocrSession(session:PageSession,hooks:PageHooks={}){
     hooks.progress?.({stage:'ocr',message:'本機 OCR 完成',backend:output.backend,ms:output.ms});
   }else session.regions=await engine({op:'ocr',image:session.blob,regions:session.regions,provider:conf.ocrProvider,profile:conf.ocrProfile},hooks.progress,hooks.signal);
   session.legacyModelKey=undefined;session.regions=session.regions.map(r=>({...r,initialTranslation:undefined}));if(session.metadata)delete session.metadata.refinement;
-  await saveSession(session);
+  hooks.signal?.throwIfAborted();
+  if(hooks.persist!==false){await saveSession(session);hooks.partial?.(session.regions);}
 }
 export const googleProxy:typeof fetch=async(input,init)=>{
   init?.signal?.throwIfAborted();const id=crypto.randomUUID(),source=new URL(String(input)).searchParams.get('q');

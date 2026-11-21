@@ -57,3 +57,9 @@ export function checkedRefinement(current:PageData[],originalSnapshot:string,res
     return {...p,refinement:output.refinement,regions:p.regions.map((r,i)=>({...r,translation:output.regions[i].translation,initialTranslation:output.regions[i].initialTranslation??r.initialTranslation}))};
   });
 }
+export class ChapterRefinementError extends Error {
+  constructor(message:string,readonly state:'failed'|'unknown'){
+    super(message);
+    this.name='ChapterRefinementError';
+  }
+}

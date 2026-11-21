@@ -21,8 +21,34 @@ export async function cachePage(page: PageData) {
   return cachePageDirect(page);
 }
 // The service worker owns one cache-index writer across all tabs/documents.
-export function cachePageDirect(page:PageData):Promise<void>{
-  return storageWrite(()=>extensionCall(()=>writePage(page)));
+export async function cachePageDirect(page:PageData):Promise<void>{
+  await storageWrite(()=>extensionCall(()=>writePage(page)));
+}
+export interface PageEditReceipt {hash:string;modelKey:string;editVersion:string;previous?:PageData}
+export async function replaceCachedPage(page:PageData):Promise<PageEditReceipt>{
+  const response=await extensionCall(()=>chrome.runtime.sendMessage({channel:'cache-page',page,rememberPrevious:true}));
+  if(!response?.ok||!response.receipt)throw new Error(response?.error??'頁面校正儲存失敗');
+  return response.receipt;
+}
+export async function undoCachedPage(receipt:PageEditReceipt){
+  const response=await extensionCall(()=>chrome.runtime.sendMessage({channel:'cache-page',undo:receipt}));
+  if(!response?.ok)throw new Error(response?.error??'無法撤銷校正');
+}
+export function replaceCachedPageDirect(page:PageData&{editVersion:string}):Promise<PageEditReceipt>{
+  return storageWrite(async()=>{
+    const previous=await writePage(page);
+    return {hash:page.hash,modelKey:page.modelKey,editVersion:page.editVersion,previous};
+  });
+}
+export function undoCachedPageDirect({hash,modelKey,editVersion,previous}:PageEditReceipt){
+  return storageWrite(async()=>{
+    const key=`page:${hash}:${modelKey}`,stored=(await chrome.storage.local.get(key))[key] as PageData|undefined;
+    if(stored?.editVersion!==editVersion)throw new Error('這張圖的快取已更新。請重新載入校正，再確認目前內容。');
+    if(previous){await chrome.storage.local.set({[key]:previous});return;}
+    const {pageKeys=[]}=await chrome.storage.local.get<{pageKeys:string[]}>('pageKeys');
+    await chrome.storage.local.set({pageKeys:pageKeys.filter(k=>k!==key)});
+    await chrome.storage.local.remove(key);
+  });
 }
 async function writePage(page:PageData) {
   const key = `page:${page.hash}:${page.modelKey}`;
@@ -34,6 +60,7 @@ async function writePage(page:PageData) {
   const keys = [key, ...pageKeys.filter((k: string) => k !== key&&!aliases.includes(k))];
   await chrome.storage.local.set({ pageKeys: keys.slice(0, 30) });
   if (aliases.length||keys.length>30) await chrome.storage.local.remove([...aliases,...keys.slice(30)]);
+  return old;
 }
 export async function loadPage(hash: string, modelKey: string): Promise<PageData | undefined> {
   return extensionCall(()=>readPage(hash,modelKey));
