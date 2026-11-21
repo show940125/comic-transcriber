@@ -1,6 +1,12 @@
 # 版本更新日誌
 
-最新公開版本為 [0.1.20](https://github.com/show940125/comic-transcriber/releases/tag/v0.1.20)，於 2026-11-21 發布。安裝與建置方式見 [README](README.md#安裝)。
+最新公開版本為 [0.1.21](https://github.com/show940125/comic-transcriber/releases/tag/v0.1.21)。安裝與建置方式見 [README](README.md#安裝)。
+
+## 0.1.21
+
+- 右下角採用 Kokonut UI Agent steps。工作中的步驟預設完整展開，可查看逐頁細節、沿用快取、Gemini 等待與回覆結果未知。
+- 譯圖套回原漫畫頁後才增加可讀頁數。停止佇列、取消或請求失敗時，會保留已完成的進度及譯圖。
+- 新增設定頁區段索引與開關、快取用量分類，調整 Chrome 彈窗、工作台切換、鍵盤提示和校正匯入確認欄。
 
 ## 0.1.20 — 2026-11-21
 

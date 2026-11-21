@@ -29,12 +29,13 @@ try{
   const worker=await freshWorker(context),base='chrome-extension://'+worker.url().split('/')[2]+'/';
   await worker.evaluate(()=>{
     const fetchOriginal=fetch,send=chrome.runtime.sendMessage.bind(chrome.runtime),contains=chrome.permissions.contains.bind(chrome.permissions);
-    const fixture={google:0,gemini:0,ocr:0,hold:false,pending:new Map(),denyGemini:true};
+    const fixture={google:0,gemini:0,ocr:0,hold:false,pending:new Map(),denyGemini:true,holdSecondOcr:false,holdGoogle:false};
     globalThis.ux=fixture;
     chrome.permissions.contains=(grant,...rest)=>fixture.denyGemini&&grant.origins?.some(x=>x.includes('gemini.google.com'))?Promise.resolve(false):contains(grant,...rest);
     globalThis.fetch=async(input,init)=>{
       if(new URL(typeof input==='string'?input:input.url??input.href).hostname!=='translate.googleapis.com')return fetchOriginal(input,init);
       fixture.google++;
+      if(fixture.holdGoogle)await new Promise(resolve=>{fixture.releaseGoogle=resolve;});
       return Response.json([[['這是初譯。','ねこです。']]]);
     };
     const region=(id,x,order)=>({id,x,y:70,width:170,height:150,order,source:'',translation:'',kind:'bubble',score:.93,render:'overlay',warnings:[]});
@@ -55,12 +56,15 @@ try{
         const source=profile==='fp32'?'新しいねこだ。':'ねこです。',needsReview=profile!=='fp32'&&r.id==='right';
         return {...r,source,translation:'',initialTranslation:undefined,ocrDone:true,needsReview,warnings:needsReview?['日文待核對']:[],ocr:{source,profile,identity:'original-fixture',preprocessing:'fixture',decoder:profile==='fp32'?'kv':'standard',backend:'wasm-fixture',warnings:[],at:1}};
       });
-      return fixture.hold?new Promise(resolve=>fixture.pending.set(m.id,()=>resolve({ok:true,result}))):Promise.resolve({ok:true,result});
+      return fixture.hold||fixture.holdSecondOcr&&fixture.ocr===2
+        ? new Promise(resolve=>fixture.pending.set(m.id,()=>resolve({ok:true,result})))
+        : Promise.resolve({ok:true,result});
     };
   });
   const options=await context.newPage();await options.goto(base+'options.html');
   const mode=p=>p.getByLabel('整章翻譯模式',{exact:true});
   const button=(p,name)=>p.getByRole('button',{name,exact:true});
+  const dockMode=(p,name)=>button(p.getByRole('group',{name:'整章翻譯模式',exact:true}),name);
   const status=(p,hasText)=>p.getByRole('status').filter({hasText});
   const activate=async(page,url)=>{
     await page.goto(url);
@@ -78,27 +82,50 @@ try{
   assert.equal(await readingProgress.getAttribute('max'),'2');
   assert.equal(await readingProgress.getAttribute('value'),'0');
   assert.equal(await button(dock,'整章 Gemini 校正').count(),0);
-  await mode(site).selectOption('gemini-direct');
+  await dockMode(site,'整章直譯').click();
   await button(dock,'前往 Gemini 設定').waitFor();
   await dock.getByText('請到設定授權 Gemini 網站。',{exact:true}).waitFor();
-  assert.equal(await mode(sibling).inputValue(),'standard');
+  assert.equal(await dockMode(sibling,'逐張初譯').getAttribute('aria-pressed'),'true');
   assert.equal(await mode(options).inputValue(),'standard');
   await site.reload();await site.locator('#page-0').evaluate(i=>i.decode());
   await activate(site,testUrl+'one');await button(dock,'前往 Gemini 設定').waitFor();
-  assert.equal(await mode(site).inputValue(),'gemini-direct');
-  await mode(site).selectOption('standard');
+  assert.equal(await dockMode(site,'整章直譯').getAttribute('aria-pressed'),'true');
+  await dockMode(site,'逐張初譯').click();
   report.checks.push('兩個分頁與全域預設獨立，重載後保留所選模式；Gemini 缺權限可前往設定');
 
-  await worker.evaluate(async()=>{globalThis.ux.denyGemini=false;await chrome.storage.local.set({geminiValidation:{status:'blocked',completed:0}});});
+  await worker.evaluate(async()=>{Object.assign(globalThis.ux,{denyGemini:false,holdSecondOcr:true,holdGoogle:true});await chrome.storage.local.set({geminiValidation:{status:'blocked',completed:0}});});
   await button(dock,'翻譯本章').click();
+  await dock.locator('[data-phase=ocr][data-status=running]').waitFor();
+  await dock.locator('[data-phase=translate][data-status=running]').waitFor();
+  await worker.evaluate(async()=>{
+    const until=performance.now()+5000;
+    while((!globalThis.ux.releaseGoogle||!globalThis.ux.pending.size)&&performance.now()<until)await new Promise(resolve=>setTimeout(resolve,25));
+    if(!globalThis.ux.releaseGoogle||!globalThis.ux.pending.size)throw Error('Two in-flight jobs not observed');
+  });
+  assert.equal(await readingProgress.getAttribute('value'),'0');
+  await dock.screenshot({path:path.join(output,'chapter-progress.png'),animations:'disabled'});
+  await button(dock,'停止佇列').click();
+  await worker.evaluate(()=>{
+    const fixture=globalThis.ux;
+    fixture.holdSecondOcr=false;fixture.holdGoogle=false;fixture.releaseGoogle();
+    for(const release of fixture.pending.values())release();
+    fixture.pending.clear();
+  });
   await status(dock,'已有 2／2 張可以閱讀').waitFor({timeout:45000});
   assert.equal(await readingProgress.getAttribute('value'),'2');
+  assert.equal(await dock.locator('[data-phase=render]').getAttribute('data-status'),'done');
+  await dock.locator('[data-phase=ocr] summary').click();
+  await status(dock,'已停止佇列。已完成的圖片與文字保留。').waitFor();
+  report.checks.push('原生內容腳本兩頁 OCR／翻譯並行，停止後在途圖片仍完成，套用後才增加可讀頁');
+  await dock.getByText(/第 1 張 · .*原文|第 1 張 · .*OCR/).waitFor();
+  await dock.locator('[data-phase=ocr] summary').click();
   await dock.getByText('請到設定準備 Gemini。',{exact:false}).first().waitFor();
   assert.equal(await button(dock,'整章 Gemini 校正').count(),0);
   assert.equal(await worker.evaluate(()=>globalThis.ux.gemini),0);
   await worker.evaluate(()=>chrome.storage.local.set({geminiValidation:{status:'passed',completed:30}}));
   await button(dock,'整章 Gemini 校正').click();
   await dock.getByRole('alert').filter({hasText:'Gemini 回覆結果未知'}).waitFor();
+  await dock.locator('[data-phase=gemini][data-status=held]').getByText('待確認',{exact:true}).waitFor();
   await status(dock,'已有 2／2 張可以閱讀').waitFor();
   assert.equal(await button(dock,'整章 Gemini 校正').count(),0);
   const diagnosticTab=context.waitForEvent('page');

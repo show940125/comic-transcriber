@@ -96,7 +96,10 @@
     <small class="mx-note">墨譯 {version} · 建置 {buildId}</small>
   </header>
 
-  <section>
+  <nav class="setting-index" aria-label="設定區段">
+    <a href="#translation">初譯</a><a href="#gemini">Gemini</a><a href="#websites">網站</a><a href="#ocr">OCR</a><a href="#context">用語</a>
+  </nav>
+  <section id="translation">
     <h2>初譯來源</h2>
     <label>翻譯方式
       <select bind:value={config.backend}>
@@ -118,7 +121,7 @@
       {#if gpu}<p class="mx-note">WebGPU {gpu.available?'可用':'不可用'} · {gpu.f16?'支援 f16':'使用 f32 模型'}</p>{/if}
     {/if}
     {#if ['webllm','google-web'].includes(config.backend)}
-      <label class="check"><input type="checkbox" bind:checked={config.localFallback}>翻譯失敗時改用已設定的本機服務</label>
+      <label class="check switch-row"><input type="checkbox" role="switch" bind:checked={config.localFallback}>翻譯失敗時改用已設定的本機服務</label>
     {/if}
     {#if config.backend==='local'||(['webllm','google-web'].includes(config.backend)&&config.localFallback)}
       <label>本機 Base URL <input bind:value={config.endpoint} placeholder="http://127.0.0.1:8080/v1"></label>
@@ -137,7 +140,7 @@
       </select>
     </label>
     <p class="mx-note">改動預設會影響新分頁。漫畫頁可另外選擇當前分頁的模式。</p>
-    <label class="check"><input type="checkbox" bind:checked={config.refineAfterChapter}>Google 初譯完成後，自動執行整章 Gemini 校正</label>
+    <label class="check switch-row"><input type="checkbox" role="switch" bind:checked={config.refineAfterChapter}>Google 初譯完成後，自動執行整章 Gemini 校正</label>
     <p class="mx-note">直譯先收齊全章日文。二段校正沿用已保存的 Google 初譯，統一人名、語氣和上下文。兩者都只傳送文字，圖片留在本機。</p>
     <button disabled={busy} onclick={prepareRefinement}>準備整章 Gemini 校正</button>
     {#if geminiRunning}<p role="status">{geminiProgress}</p>{/if}
@@ -160,9 +163,9 @@
     </details>
   </section>
 
-  <section>
+  <section id="websites">
     <div class="title-row"><h2>網站自動翻譯</h2><span class="chip">{config.auto?'已開啟':'手動啟用'}</span></div>
-    <label class="check"><input type="checkbox" bind:checked={config.auto}>自動翻譯所選網站的可見漫畫圖片</label>
+    <label class="check switch-row"><input type="checkbox" role="switch" bind:checked={config.auto}>自動翻譯所選網站的可見漫畫圖片</label>
     {#each siteGrants as site (site)}
       <label class="check"><input type="checkbox" checked={config.autoSites?.includes(site)??false} onchange={e=>selectSite(site,e.currentTarget.checked)}>{site}</label>
     {:else}<p class="mx-note">尚未加入要自動翻譯的網站。</p>{/each}
@@ -175,7 +178,7 @@
     </details>
   </section>
 
-  <section>
+  <section id="ocr">
     <h2>漫畫文字辨識</h2>
     <label>OCR 模式
       <select aria-label="OCR 模式" bind:value={config.ocrProfile}><option value="int8">INT8 輕量（預設）</option><option value="fp32">全精度（另行下載）</option></select>
@@ -185,7 +188,7 @@
     <details>
       <summary>執行後端、執行緒與模型版本</summary>
       <label>瀏覽器 OCR 後端 <select bind:value={config.ocrProvider}><option value="wasm">WASM CPU（預設）</option><option value="auto">WebGPU 優先，失敗時使用 WASM</option></select></label>
-      <label class="check"><input type="checkbox" bind:checked={config.localOcr}>使用獨立本機 ONNX OCR 服務</label>
+      <label class="check switch-row"><input type="checkbox" role="switch" bind:checked={config.localOcr}>使用獨立本機 ONNX OCR 服務</label>
       {#if config.localOcr}<label>OCR Base URL <input bind:value={config.ocrEndpoint}></label>{/if}
       <label>WASM 執行緒
         <select aria-label="WASM 執行緒" bind:value={config.wasmThreads}><option value="auto">自動（依 CPU 使用 1–4 緒）</option><option value={1}>1</option><option value={2}>2</option><option value={4}>4</option></select>
@@ -202,7 +205,7 @@
     </details>
   </section>
 
-  <section>
+  <section id="context">
     <h2>翻譯用語與上下文</h2>
     <p class="mx-note">Gemini、WebLLM 與本機模型會使用以下文字。設定會套用於不同作品。</p>
     <label>作品名稱 <input bind:value={config.title}></label>
@@ -215,7 +218,7 @@
 
   <footer>
     <div class="save-row">
-      <div>{#if error}<small class="mx-alert" role="alert">{error}</small>{:else}<small class="mx-note" role="status">{message||(!saved?'正在載入設定…':dirty?'有尚未儲存的變更':'設定已同步')}</small>{/if}</div>
+      <div class="save-status" class:pending={dirty}>{#if error}<small class="mx-alert" role="alert">{error}</small>{:else}<small class="mx-note" role="status">{dirty?'有尚未儲存的變更':message||(!saved?'正在載入設定…':'設定已同步')}</small>{/if}</div>
       <button class="primary" disabled={!dirty||busy} onclick={save}>儲存設定</button>
     </div>
   </footer>
@@ -234,6 +237,16 @@
   label :where(input:not([type=checkbox]), select, textarea) { display: block; width: 100%; margin-top: 5px; }
   .check { display: flex; gap: 8px; align-items: start; overflow-wrap: anywhere; }
   .check input { margin: .25em 0 0; accent-color: var(--mx-green); }
+  .setting-index { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:3px; max-width:395px; margin-top:12px; padding:4px; border:1px solid var(--mx-line); border-radius:11px; background:var(--mx-tint); }
+  .setting-index a { padding:6px 2px; border-radius:7px; text-decoration:none; text-align:center; font-size:13px; }
+  .setting-index a:hover, .setting-index a:focus-visible { background:var(--mx-surface); }
+  section:target { border-color:var(--mx-green); }
+  .switch-row { align-items:center; padding:8px 10px; border:1px solid var(--mx-line); border-radius:9px; background:var(--mx-surface); }
+  .switch-row input { margin:0; flex:0 0 38px; height:23px; appearance:none; position:relative; background:#d3ddd2; border:1px solid #9bb29e; border-radius:16px; cursor:pointer; }
+  .switch-row input::before { content:""; position:absolute; inset:3px auto 3px 3px; width:15px; border-radius:50%; background:white; transition:transform 170ms ease; }
+  .switch-row input:checked { background:var(--mx-green); border-color:var(--mx-green); }
+  .switch-row input:checked::before { transform:translateX(15px); }
+  @media(prefers-reduced-motion:reduce) { .switch-row input::before { transition:none; } }
   details { border-top: 1px solid var(--mx-line); padding-top: 8px; margin: 12px 0 0; }
   pre { overflow: auto; font-size: 12px; }
   .chip { background: #e3eee1; color: var(--mx-green); border-radius: 12px; padding: 2px 9px; font-size: 12px; }
@@ -241,4 +254,6 @@
   .save-row { max-width: 800px; margin: auto; padding: 9px clamp(14px, 4vw, 28px); display: flex; align-items: center; justify-content: space-between; gap: 10px; }
   .save-row small { display: block; overflow-wrap: anywhere; }
   .save-row button { flex-shrink: 0; }
+  .save-status { border-left:3px solid var(--mx-border); padding-left:8px; }
+  .save-status.pending { border-color:#a97336; }
 </style>

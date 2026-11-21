@@ -4,11 +4,12 @@
   // The measured indicator and keyboard selection are ported from the React component.
   import {moveToolbarFocus} from './toolbar';
 
-  let {items, label, value, disabled = false, onChange}: {
+  let {items, label, value, disabled = false, variant = 'segment', onChange}: {
     items: readonly {id: string; title: string}[];
     label: string;
     value: string;
     disabled?: boolean;
+    variant?: 'segment'|'tab';
     onChange: (id: string) => void;
   } = $props();
   let container = $state<HTMLDivElement>();
@@ -43,7 +44,7 @@
   }
 </script>
 
-<div class="smooth-tabs" class:measured={!!indicator} bind:this={container} role="group" aria-label={label}>
+<div class="smooth-tabs" class:measured={!!indicator} data-variant={variant} bind:this={container} role="group" aria-label={label}>
   {#if indicator}
     <span class="indicator" aria-hidden="true"
       style:width={`${indicator.width - 8}px`} style:transform={`translateX(${indicator.left + 4}px)`}></span>
@@ -60,7 +61,7 @@
     position: relative;
     display: grid;
     grid-auto-flow: column;
-    grid-auto-columns: 1fr;
+    grid-auto-columns: minmax(0,1fr);
     gap: 4px;
     padding: 4px;
     border: 1px solid var(--mx-line);
@@ -82,16 +83,19 @@
 
   .smooth-tabs button {
     position: relative;
-    min-width: 66px;
+    min-width: 0;
     min-height: 33px;
     padding: 4px 8px;
     border: 0;
     background: transparent;
     color: var(--mx-muted);
+    overflow-wrap:anywhere;
   }
 
   .smooth-tabs button:hover:not([aria-pressed=true]):not(:disabled) { background: #cddcce88; }
   .measured button[aria-pressed=true] { color: white; font-weight: 650; background: transparent; }
+  [data-variant=tab] .indicator { background:var(--mx-surface); }
+  [data-variant=tab].measured button[aria-pressed=true] { color:var(--mx-ink); }
 
   @media (prefers-reduced-motion: reduce) {
     .indicator { transition: none; }

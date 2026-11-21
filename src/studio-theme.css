@@ -61,7 +61,17 @@
 .moyu :where(.mx-warning) { background: var(--mx-review-bg); color: var(--mx-review); border-radius: 7px; padding: 6px 10px; overflow-wrap: anywhere; }
 .moyu :where(dialog) { color: var(--mx-ink); background: var(--mx-paper); border: 1px solid var(--mx-border); border-radius: 12px; box-shadow: var(--mx-shadow); }
 .moyu :where(dialog)::backdrop { background: #182d25a6; }
+.moyu [data-mx-tip] { position:relative; }
+.moyu [data-mx-tip]::after {
+  content:attr(data-mx-tip); position:absolute; z-index:10; top:calc(100% + 4px); right:0;
+  padding:4px 6px; border-radius:6px; white-space:nowrap; pointer-events:none;
+  color:white; background:var(--mx-green); font:12px/1.4 system-ui,sans-serif;
+  opacity:0; scale:.96; transition:opacity .14s,scale .14s;
+}
+.moyu [data-mx-tip]:is(:hover,:focus-visible):not(:disabled)::after { opacity:1; scale:1; }
+.moyu footer [data-mx-tip]::after { top:auto; bottom:calc(100% + 4px); }
 
 @media (prefers-reduced-motion: reduce) {
   .moyu :where(button, .mx-button) { transition: none; }
+  .moyu [data-mx-tip]::after { transition:none; }
 }

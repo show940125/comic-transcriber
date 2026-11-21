@@ -29,6 +29,7 @@ export interface Diagnostic {
   stage: Stage; message: string; backend?: string; model?: string; ms?: number;
   httpStatus?:number;regionId?:string;attempt?:number;cause?:'http'|'network'|'cancel';
   jobId?:string;pageIndex?:number;
+  chapterStep?:import('./chapter-progress').ChapterEvent;
 }
 export interface Settings {
   backend: 'webllm' | 'local' | 'chrome' | 'google-web' | 'gemini-web'; model: '2b' | '0.8b'; localFallback: boolean;

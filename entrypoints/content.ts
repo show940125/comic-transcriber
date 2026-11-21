@@ -6,6 +6,7 @@ import ChapterDock from '../src/ChapterDock.svelte';
 import {draggableDock} from '../src/dock-position';
 import { chapterImages, imageSource,expectedImageAssignment } from '../src/site-images';
 import type { Diagnostic,PageData,Settings } from '../src/types';
+import type {ChapterEvent,ChapterPhase} from '../src/chapter-progress';
 import {loadSession,processSession,encodeSession,sessionData,saveSession} from '../src/page-pipeline';
 import {chapterSnapshot,chapterFingerprint,checkedRefinement,refinementContext,ChapterRefinementError} from '../src/chapter-refinement';
 import {contentSignature} from '../src/core';
@@ -66,10 +67,16 @@ export default defineContentScript({
       const limit=['google-web','chrome','gemini-web'].includes(conf.backend)?conf.pageConcurrency:1,turns=new OrderedTurns(),modelKey=contentSignature(conf);
       const operation=runPool(images,limit,async(image,index)=>{
         const displayed=chapterDrafts.get(image);
-        if(image.dataset.comicResult&&!ocrOnly&&displayed?.modelKey===modelKey){turns.finish(index);return;}
+        if(image.dataset.comicResult&&!ocrOnly&&displayed?.modelKey===modelKey){
+          for(const phase of ['prepare','ocr','translate','render'] as const)report({stage:'complete',pageIndex:index,message:'沿用已呈現的譯圖',chapterStep:{phase,status:'reused'}});
+          turns.finish(index);return;
+        }
         if(location.href!==chapterUrl||!image.isConnected)throw new Error('漫畫頁已變更，請重新啟動章節翻譯');
         const existing=activeImages.get(image);if(existing){await existing;return;}
-        const jobId=crypto.randomUUID(),started=performance.now(),progress=(d:Diagnostic)=>report({...d,jobId,pageIndex:index});
+        let phase:ChapterPhase='prepare',cachedOcr=false,cachedTranslation=false;
+        const jobId=crypto.randomUUID(),started=performance.now();
+        const progress=(d:Diagnostic)=>report({...d,jobId,pageIndex:index,chapterStep:d.chapterStep??{phase,status:'running'}});
+        const mark=(status:ChapterEvent['status'],message:string)=>progress({stage:phase==='render'?'rendering':phase==='translate'?'translating':phase==='ocr'?'ocr':'loading',message,chapterStep:{phase,status}});
         const work=async()=>{
           let page:Awaited<ReturnType<typeof loadSession>>|undefined;
           const release=()=>{if(contextAlive())detached(()=>chrome.runtime.sendMessage({channel:'image-slot-release',id:jobId}));};
@@ -85,16 +92,24 @@ export default defineContentScript({
             // Reuse verified OCR from the Google cache, keeping its translations
             // and manual corrections in their original, separate cache entry.
             if(ocrOnly&&!page.regions.length){const cached=reusableOcr?.get(page.hash);if(cached){page.regions=structuredClone(cached.regions).map(r=>({...r,translation:'',initialTranslation:undefined}));await saveSession(page);}}
+            mark('done','圖片已載入');
+            phase='ocr';cachedOcr=page.regions.length>0&&!page.regions.some(r=>!r.ocrDone&&!r.source.trim());
+            mark('running','偵測與辨識日文文字框');
             try{await processSession(page,{ocrOnly,progress,signal:controller,beforeTranslate:async()=>{
               recognizedPages.add(image);refreshDock?.();
+              mark(cachedOcr?'reused':'done',cachedOcr?'沿用已存原文':'日文 OCR 已完成');
+              phase='translate';mark('running','準備逐頁翻譯');
               if(conf.backend==='gemini-web'){await turns.wait(index,controller);if(page!.config.priorSummary!==priorSummary){page!.config.priorSummary=priorSummary;page!.regions.forEach(r=>r.translation='');}}
+              cachedTranslation=page!.regions.some(r=>!!r.translation.trim())&&!page!.regions.some(r=>r.source.trim()&&!r.needsReview&&!r.translation.trim());
             },canTranslate:()=>!failed,onFailure:()=>{failed=true;}});if(conf.backend==='gemini-web')priorSummary=page.regions.map(r=>r.translation).filter(Boolean).join('\n').slice(-1200);}finally{turns.finish(index);}
             controller.throwIfAborted();if(location.href!==chapterUrl||!image.isConnected||(original.get(image)??imageSource(image))!==source)throw new Error('漫畫頁或圖片已變更，已存文字保留');
-            if(ocrOnly){directDrafts.set(image,sessionData(page));recognizedPages.add(image);image.dataset.comicOcr=page.hash;progress({stage:'complete',message:'日文 OCR 已保存，等待整章 Gemini 直譯',ms:performance.now()-started});complete();return;}
+            if(ocrOnly){directDrafts.set(image,sessionData(page));recognizedPages.add(image);image.dataset.comicOcr=page.hash;mark(cachedOcr?'reused':'done','日文 OCR 已保存，等待整章 Gemini 直譯');complete();return;}
+            mark(cachedTranslation?'reused':'done',cachedTranslation?'沿用已存譯文':'本張翻譯階段完成');
+            phase='render';
             progress({stage:'rendering',message:'嵌字及 PNG 編碼'});const renderStarted=performance.now(),data=await encodeSession(page);progress({stage:'rendering',message:'嵌字及 PNG 完成',ms:performance.now()-renderStarted});controller.throwIfAborted();if(!live)return;
             chapterDrafts.set(image,sessionData(page));applyImage(image,data,chapterDrafts.get(image));image.dataset.comicReview=String(page.regions.filter(r=>r.needsReview||r.warnings.some(w=>/^原文清除需校正|^中文空間不足/.test(w))).length);
             if(limit===1)priorSummary=page.regions.map(r=>r.translation).filter(Boolean).join('\n').slice(-1200);
-            progress({stage:'complete',message:'本張完成並已呈現',ms:performance.now()-started});complete();
+            progress({stage:'complete',message:'本張完成並已呈現',ms:performance.now()-started,chapterStep:{phase,status:'done'}});complete();
           }catch(error){
             if(!(error instanceof DeferredTranslationError))failed=true;
             image.dataset.comicError=error instanceof Error?error.message:String(error);if(/403|429/.test(image.dataset.comicError))softPaused=true;
@@ -119,7 +134,7 @@ export default defineContentScript({
         const response = await extensionCall(()=>chrome.runtime.sendMessage({ channel: 'fetch-image', url })); if (!response.ok) throw new Error(response.error); return response;
       }
     }
-    async function refineImages(images:HTMLImageElement[],report:(d:Diagnostic)=>void,signal:AbortSignal,direct=false){
+    async function refineImages(images:HTMLImageElement[],report:(d:Diagnostic)=>void,signal:AbortSignal,direct=false,standalone=false){
       const storedConf=await settings(),conf=direct?{...storedConf,backend:'gemini-web' as const}:storedConf;if(!direct&&conf.backend!=='google-web')throw new Error('整章二段校正使用 Google 初譯，請將翻譯來源設為 Google');
       const drafts=direct?directDrafts:chapterDrafts;
       if(!images.length||images.some(i=>(!direct&&!i.dataset.comicResult)||!drafts.has(i)))throw new Error(direct?'請先完成本頁全部圖片的 OCR':'請先完成本頁全部圖片的初譯；已完成文字可從快取續翻');
@@ -132,16 +147,21 @@ export default defineContentScript({
       await refreshDrafts();assertChapter();
       const input=structuredClone(currentPages()),snapshot=chapterSnapshot(input),fingerprint=await chapterFingerprint(input),contextKey=await refinementContext(conf,direct);
       const reused=input.every(p=>p.refinement?.outputFingerprint===fingerprint&&p.refinement.contextKey===contextKey);
-      if(reused&&images.every((i,n)=>i.dataset.comicResult&&renderedPages.get(i)===chapterSnapshot([input[n]]))){report({stage:'complete',message:'整章翻譯／校正已完成，沿用已存結果'});if(runAbort===localAbort)runAbort=undefined;return;}
+      if(standalone)report({stage:'loading',message:'已核對本章保存的初譯',chapterStep:{phase:'prepare',status:'reused'}});
+      if(reused&&images.every((i,n)=>i.dataset.comicResult&&renderedPages.get(i)===chapterSnapshot([input[n]]))){
+        for(let index=0;index<images.length;index++)report({stage:'complete',message:'沿用已套用的譯圖',pageIndex:index,chapterStep:{phase:'reflow',status:'reused'}});
+        report({stage:'complete',message:'整章翻譯／校正已完成，沿用已存結果',chapterStep:{phase:'gemini',status:'reused'}});
+        if(runAbort===localAbort)runAbort=undefined;return;
+      }
       const readiness=await extensionCall(()=>chrome.runtime.sendMessage({channel:'gemini-status'}));
       if(!readiness?.ok||!readiness.result?.ready){if(runAbort===localAbort)runAbort=undefined;throw new Error(readiness?.error??'Google 初譯已完成；請先在設定準備匿名 Gemini，才能進行整章校正');}
-      const listener=(m:any)=>{if(m.channel==='progress'&&m.id===id)report(m.diagnostic);};
+      const listener=(m:any)=>{if(m.channel==='progress'&&m.id===id)report({...m.diagnostic,chapterStep:{phase:'gemini',status:'running'}});};
       const cancel=()=>{if(contextAlive()){detached(()=>chrome.runtime.sendMessage({channel:'cancel',id}));detached(()=>chrome.runtime.sendMessage({channel:'image-slot-cancel',id}));}};
       controller.addEventListener('abort',cancel,{once:true});
       try{
         assertChapter();const slot=await extensionCall(()=>chrome.runtime.sendMessage({channel:'image-slot-acquire',id}));if(!slot?.ok)throw new Error(slot?.error??'校正排程未回應');
         await extensionCall(()=>chrome.runtime.onMessage.addListener(listener));assertChapter();
-        report({stage:'translating',message:`${direct?'OCR 完成':'Google 初譯完成'}，Gemini 正在閱讀整章 ${images.length} 張`,backend:'gemini-web/refinement'});
+        if(!reused)report({stage:'translating',message:`${direct?'OCR 完成':'Google 初譯完成'}，Gemini 正在閱讀整章 ${images.length} 張`,backend:'gemini-web/refinement',chapterStep:{phase:'gemini',status:'running'}});
         const response=reused?{ok:true,result:{pages:input,fingerprint,regions:input.flatMap(p=>p.regions).filter(r=>r.translation).length,changed:0,ms:0}}:await extensionCall(()=>chrome.runtime.sendMessage({channel:direct?'gemini-chapter':'gemini-refine',id,pages:input,settings:conf}));
         if(!response?.ok){
           const message=response?.error??'整章 Gemini 請求未回應';
@@ -155,12 +175,14 @@ export default defineContentScript({
         // Persist all validated translations before PNG work. A later rendering
         // cancellation can resume from this result without another Gemini call.
         for(let index=0;index<output.length;index++){await cachePage(output[index]);drafts.set(images[index],output[index]);}
+        report({stage:'rendering',message:reused?'沿用已核對的 Gemini 回覆':'Gemini 回覆已核對並保存',chapterStep:{phase:'gemini',status:reused?'reused':'done'}});
         // Validate the entire response before changing any displayed page.
         for(let index=0;index<images.length;index++){
-          assertChapter();const image=images[index],p=output[index];report({stage:'rendering',message:`整章校正核對完成，重排 ${index+1}/${images.length}`,pageIndex:index});
+          assertChapter();const image=images[index],p=output[index];report({stage:'rendering',message:`整章校正核對完成，重排 ${index+1}/${images.length}`,pageIndex:index,chapterStep:{phase:'reflow',status:'running'}});
           const data=await bytes(image),page=await loadSession(new Blob([imageBytes(data.base64)],{type:data.mime}),conf,controller);
           try{if(page.hash!==p.hash)throw new Error('圖片內容已變更，停止套用校正');page.regions=p.regions;page.metadata={sourcePageUrl:chapterUrl,imageUrl:sources[index],pageIndex:index,refinement:p.refinement};const png=await encodeSession(page);assertChapter();chapterDrafts.set(image,sessionData(page));applyImage(image,png,chapterDrafts.get(image));image.dataset.comicReview=String(page.regions.filter(r=>r.needsReview||r.warnings.some(w=>/^原文清除需校正|^中文空間不足/.test(w))).length);}
           finally{page.dispose();}
+          report({stage:'complete',message:'校正版譯圖已套用',pageIndex:index,chapterStep:{phase:'reflow',status:'done'}});
         }
         report({stage:'complete',message:direct?`整章 Gemini 直譯完成：${images.length} 張、${response.result.regions} 個區域`:`整章二段校正完成：${response.result.regions} 個區域，修改 ${response.result.changed} 處`,backend:'gemini-web/refinement',ms:response.result.ms});
       }finally{controller.removeEventListener('abort',cancel);if(contextAlive()){detached(()=>chrome.runtime.onMessage.removeListener(listener));detached(()=>chrome.runtime.sendMessage({channel:'image-slot-release',id}));}if(runAbort===localAbort)runAbort=undefined;}

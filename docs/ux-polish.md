@@ -1,5 +1,11 @@
 # 章節工作台與擴充套件彈窗
 
+## 0.1.21 章節執行進度
+
+右下角預設展開 Agent steps。逐張初譯可同時顯示兩頁各自的步驟，整章直譯收齊 OCR 後才送 Gemini。收到回覆、核對並保存譯文、套用譯圖各有可辨認的狀態。可讀頁數取自頁面上已有的譯圖。停止新派工、取消或遇到未知結果時，畫面保留當次工作已完成的步驟。[Agent steps 原始範例](https://kokonutui.com/docs/ai/ai-loading)
+
+設定增加區段索引與開關，網站勾選仍逐一保存。快取用量條顯示已計量的頁面與模型，兩類可直接選取，瀏覽器的儲存估算及套件內建資源仍各自列出。彈窗保留 336 px 原生尺寸，校正匯入仍在獨立分頁。
+
 ## 0.1.20 原生彈窗修正及元件實裝
 
 0.1.19 使用 `max-width: 100vw` 限制彈窗。Chrome 以內容估算彈窗大小，內容卻反過來被初始視窗大小限制，造成逐字換行。在隔離 Chromium 用 `chrome.action.openPopup()` 開啟實際彈窗，0.1.18 為 300 px，0.1.19 縮到 104 px。0.1.20 以 336 px 固定內容寬度，Chromium 與 Edge 的已啟用頁面均量到 336 × 255 px，並驗證方向鍵、隱藏及恢復工具列。[Chrome 擴充套件 action 說明](https://developer.chrome.com/docs/extensions/reference/api/action#popup)

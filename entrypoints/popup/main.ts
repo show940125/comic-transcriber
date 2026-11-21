@@ -6,6 +6,7 @@ const button=(id:string)=>document.getElementById(id) as HTMLButtonElement;
 const primary=button('primary'),visibility=button('visibility'),pause=button('pause'),grant=button('grant');
 const text=document.getElementById('status')!,tabState=document.getElementById('tab-state')!,access=document.getElementById('access-state')!;
 const tabCard=document.querySelector<HTMLElement>('.tab-card')!;
+const tabCaption=document.getElementById('tab-caption')!;
 document.getElementById('popup-version')!.textContent=chrome.runtime.getManifest().version;
 attachToolbar(document.querySelector<HTMLElement>('.shortcuts')!);
 let tab:chrome.tabs.Tab|undefined,tools:{hidden:boolean;hasImages:boolean}|undefined,inFlight=false;
@@ -18,6 +19,7 @@ async function inspect(){
   const active=web?await chrome.tabs.sendMessage(tab!.id!,{channel:'page-tools-state'}).catch(()=>undefined):undefined;
   tools=active?.ok?active:undefined;
   tabCard.dataset.state=tools?(tools.hidden?'hidden':'visible'):'inactive';
+  tabCaption.textContent=!web?'目前分頁':tools?.hidden?'工具列已隱藏':tools?'已啟用本頁':'尚未啟用本頁';
   primary.hidden=!web||!!tools&&!tools.hidden;
   primary.textContent=tools?.hidden?'顯示工具列':'啟用本頁墨譯';
   visibility.hidden=!tools||tools.hidden;

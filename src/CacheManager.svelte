@@ -8,6 +8,7 @@
   let confirmation:HTMLDialogElement;
   let pending=$state<{selection:CacheSelection;label:string;count:number;unit:string;impact:string}>();
   const search=$derived(filter.trim().toLowerCase()),filtered=$derived(!!(category!=='all'||search||after||before));
+  const measured=$derived((data?.pageBytes??0)+(data?.modelBytes??0));
   const within=(n:number|undefined)=>(!after&&!before)||!!n&&(!after||n>=new Date(after+'T00:00:00').getTime())&&(!before||n<=new Date(before+'T23:59:59.999').getTime());
   const size=(n:number|undefined)=>n===undefined?'尚未計量':n<1048576?((n/1024).toFixed(1)+' KiB'):((n/1048576).toFixed(2)+' MiB');
   const date=(n:number|undefined)=>n?new Date(n).toLocaleString('zh-TW'):'未記錄';
@@ -94,6 +95,16 @@
   {#if data}
     <section>
       <h2>儲存用量</h2>
+      <div class="meter-number"><strong>{size(measured)}</strong><span>已計量的快取</span></div>
+      <div class="meter" aria-hidden="true">
+        {#if measured}
+          <i class="page-segment" style:width={`${100*data.pageBytes/measured}%`}></i><i class="model-segment" style:width={`${100*data.modelBytes/measured}%`}></i>
+        {/if}
+      </div>
+      <div class="meter-legend" role="group" aria-label="快取用量分類">
+        <button aria-pressed={category==='pages'} onclick={()=>category=category==='pages'?'all':'pages'}><i class="page-segment"></i><span>頁面快取</span><b>{size(data.pageBytes)}</b></button>
+        <button aria-pressed={category==='models'} onclick={()=>category=category==='models'?'all':'models'}><i class="model-segment"></i><span>下載模型</span><b>{size(data.modelBytes)}</b></button>
+      </div>
       <p>頁面文字與校正 {size(data.pageBytes)}（{data.pages.length} 份，上限 30 份）</p>
       <p>已計量下載模型 {size(data.modelBytes)}，尚有 {data.unmeasured} 個檔案待掃描。</p>
       <p class="mx-note">Chrome 估算此擴充套件使用 {size(data.estimate?.usage)}。此數字涵蓋瀏覽器管理的內容。</p>
@@ -171,6 +182,16 @@
   h2 { font-size: 16px; margin: 0; }
   p { margin: 6px 0 9px; }
   section { background: var(--mx-paper); border: 1px solid var(--mx-line); border-radius: 10px; margin: 12px 0; padding: 16px; }
+  .meter-number { display:flex; flex-wrap:wrap; gap:4px 8px; align-items:baseline; color:var(--mx-muted); }
+  .meter-number strong { color:var(--mx-ink); font-size:clamp(24px,4vw,38px); font-variant-numeric:tabular-nums; }
+  .meter { display:flex; min-height:10px; border-radius:8px; overflow:hidden; background:var(--mx-tint); }
+  .page-segment { background:#2f654c; }
+  .model-segment { background:#8b7864; }
+  .meter-legend { display:flex; flex-wrap:wrap; gap:5px; margin:8px 0; }
+  .meter-legend button { display:flex; flex:1 1 150px; gap:5px; align-items:center; }
+  .meter-legend i { width:8px; height:8px; border-radius:2px; flex:none; }
+  .meter-legend b { margin-left:auto; font-variant-numeric:tabular-nums; }
+  .meter-legend button[aria-pressed=true] { background:var(--mx-tint); border-color:var(--mx-green); }
   .filters, .actions { display: flex; align-items: end; flex-wrap: wrap; gap: 8px; }
   .filters label { display: grid; gap: 3px; color: var(--mx-muted); font-size: 13px; }
   .filters label input { max-width: 100%; }

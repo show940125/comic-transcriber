@@ -53,10 +53,13 @@ try{
  site=await context.newPage();site.on('pageerror',e=>report.errors.push(String(e)));await site.goto(base);await site.waitForFunction(()=>[...document.images].every(i=>i.complete));
  const tabs=await worker.evaluate(()=>chrome.tabs.query({})),tab=tabs.find(t=>t.url?.startsWith(base));assert(tab);
  assert.equal((await page.evaluate(tabId=>chrome.runtime.sendMessage({channel:'activate-page',tabId}),tab.id)).ok,true);
- await site.getByLabel('整章翻譯模式',{exact:true}).selectOption('gemini-direct');await site.getByRole('button',{name:'翻譯本章',exact:true}).click();
+ await site.getByRole('group',{name:'整章翻譯模式',exact:true}).getByRole('button',{name:'整章直譯',exact:true}).click();await site.getByRole('button',{name:'翻譯本章',exact:true}).click();
  await site.getByRole('status').filter({hasText:'整章 Gemini 直譯完成'}).waitFor({timeout:60000});
  await site.getByRole('status').filter({hasText:'已有 29／29 張可以閱讀'}).waitFor();
  assert.equal(await site.evaluate(()=>[...document.images].filter(i=>i.dataset.comicResult).length),29);
+ assert.equal(await site.locator('[data-phase=gemini]').getAttribute('data-status'),'done');
+ assert.equal(await site.locator('[data-phase=reflow]').getAttribute('data-status'),'done');
+ await site.locator('[data-phase=ocr]').getByText('29／29 張 · 沿用 29',{exact:true}).waitFor();
  const saved=await page.evaluate(async()=>{const {pageKeys}=await chrome.storage.local.get('pageKeys');const data=await chrome.storage.local.get(pageKeys);return pageKeys.map(k=>data[k]);});
  assert.equal(saved.filter(p=>p.refinement?.mode==='direct').length,29);
  for(let n=0;n<29;n++){const p=saved.find(p=>p.hash===hashes[n]&&p.refinement?.mode==='direct');assert.equal(p.regions[0].translation,`第 ${n+1} 頁直譯`);assert.equal(p.regions[0].initialTranslation,undefined);}

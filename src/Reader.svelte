@@ -351,7 +351,7 @@
         {#if chapterNav}<span class="page-count">第 {chapterNav.index+1}／{chapterNav.pages.length} 張</span>{/if}
       </div>
       {#if chapterNav}
-        <button onclick={onClose}>關閉工作台</button>
+        <button aria-label="關閉工作台" data-mx-tip="關閉工作台" onclick={onClose}>關閉工作台</button>
       {:else if !siteInput}
         <a href="options.html" target="_blank" rel="noopener">模型與閱讀設定</a>
       {/if}
@@ -359,11 +359,11 @@
     {#if chapterNav||image}
     <div class="navigation-actions">
       {#if chapterNav}<nav class="pager" aria-label="切換章節頁面">
-        <button disabled={busy||chapterNav.index===0} onclick={()=>chapterNav?.select(chapterNav.index-1)}>上一張</button>
+        <button aria-label="上一張" data-mx-tip="上一張" disabled={busy||chapterNav.index===0} onclick={()=>chapterNav?.select(chapterNav.index-1)}>‹</button>
         <select aria-label="切換章節圖片" value={chapterNav.index} disabled={busy} onchange={e=>chapterNav?.select(Number(e.currentTarget.value))}>
           {#each chapterNav.pages as page,index}<option value={index}>第 {index+1} 張{page.ready?' · 已有譯圖':page.failed?' · 待處理':''}</option>{/each}
         </select>
-        <button disabled={busy||chapterNav.index===chapterNav.pages.length-1} onclick={()=>chapterNav?.select(chapterNav.index+1)}>下一張</button>
+        <button aria-label="下一張" data-mx-tip="下一張" disabled={busy||chapterNav.index===chapterNav.pages.length-1} onclick={()=>chapterNav?.select(chapterNav.index+1)}>›</button>
       </nav>{/if}
     {#if image}
       <div class="toolbar" aria-label="頁面操作">
@@ -466,7 +466,7 @@
         {/if}
         {#if active}
           <div class="segmented">
-            <SmoothTab items={editors} label="校正項目" value={panel}
+            <SmoothTab items={editors} label="校正項目" value={panel} variant="tab"
               onChange={id=>panel=id==='layout'?'layout':'text'} />
           </div>
           {#if panel==='text'}
@@ -562,7 +562,7 @@
         {#if undo}<button disabled={busy} onclick={()=>action(undoEdit)}>撤銷{undo.label}</button>{/if}
         {#if saveFailed}<button disabled={busy} onclick={()=>action(save)}>重試儲存</button>{/if}
         {#if image}
-          <details class="menu export"><summary>匯出</summary><div class="menu-items">
+          <details class="menu export"><summary data-mx-tip="匯出圖片或校正 JSON">匯出</summary><div class="menu-items">
             <button disabled={!canvas||busy} onclick={()=>canvas?.toBlob(b=>{if(b)download(b,`${filename}-translated.png`);},'image/png')}>匯出 PNG</button>
             <button disabled={busy} onclick={exportJson}>匯出校正 JSON</button>
           </div></details>

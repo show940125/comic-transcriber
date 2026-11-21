@@ -9,7 +9,7 @@
   </header>
   <section class="tab-card" aria-label="目前分頁">
     <span class="tab-dot" aria-hidden="true"></span>
-    <p id="tab-state" class="mx-note">正在確認目前分頁…</p>
+    <div><strong id="tab-caption">目前分頁</strong><p id="tab-state" class="mx-note">正在確認目前分頁…</p></div>
     <button id="primary" class="primary" type="button" hidden></button>
   </section>
   <div class="shortcuts" role="toolbar" aria-label="墨譯功能">
@@ -50,7 +50,7 @@
     .tab-dot { margin-top: 7px; width: 7px; height: 7px; border-radius: 50%; background: var(--mx-border); }
     .tab-card[data-state=visible] .tab-dot { background: var(--mx-green); }
     .tab-card[data-state=hidden] .tab-dot { background: #a56725; }
-    .tab-card p { margin: 0; }
+    .tab-card p { margin: 3px 0 0; font-size: 12px; }
     .tab-card button { grid-column: 1 / -1; }
     .shortcuts {
       display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 3px;

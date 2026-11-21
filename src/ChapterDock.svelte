@@ -5,14 +5,18 @@
   import {defaults} from './types';
   import {settings} from './storage';
   import {ChapterRefinementError} from './chapter-refinement';
+  import {ChapterProgress,type ChapterMode,type ChapterPhase,type ChapterStep} from './chapter-progress';
+  import AgentSteps from './vendor/kokonut-ui/AgentSteps.svelte';
+  import SmoothTab from './vendor/kokonut-ui/SmoothTab.svelte';
 
   type Mode=NonNullable<Settings['chapterMode']>;
+  const modes=[{id:'standard',title:'逐張初譯'},{id:'gemini-direct',title:'整章直譯'}];
   type Activity={total:number;readable:number;recognized:number;directReady:number;standardReady:number;googleReady:number;directRendered:number;review:number};
   let {getImages,getActivity,runChapter,refineChapter,onRunning,openChapter,toggleOriginal}:{
     getImages:()=>HTMLImageElement[];
     getActivity:(images:HTMLImageElement[],config:Settings)=>Activity;
     runChapter:(images:HTMLImageElement[],progress:(d:Diagnostic)=>void,complete:()=>void,stopped:()=>boolean,signal:AbortSignal,ocrOnly?:boolean)=>Promise<void>;
-    refineChapter:(images:HTMLImageElement[],progress:(d:Diagnostic)=>void,signal:AbortSignal,direct?:boolean)=>Promise<void>;
+    refineChapter:(images:HTMLImageElement[],progress:(d:Diagnostic)=>void,signal:AbortSignal,direct?:boolean,standalone?:boolean)=>Promise<void>;
     onRunning:(running:boolean)=>void;
     openChapter:(opener:HTMLElement)=>void;
     toggleOriginal:()=>void;
@@ -20,9 +24,10 @@
   let config=$state<Settings>({...defaults}),tabMode=$state<Mode>(),collapsed=$state(false),modeLoaded=$state(false);
   let mode=$derived(tabMode??config.chapterMode??'standard'),direct=$derived(mode==='gemini-direct');
   let readiness=$state<'checking'|'ready'|'permission'|'validation'|'unavailable'>('checking');
-  let running=$state(false),stopped=$state(false),refining=$state(false),changingMode=$state(false);
+  let running=$state(false),stopped=$state(false),refining=$state(false),changingMode=$state(false),cancelling=$state(false);
   let detail=$state(''),failure=$state(''),unknownMode=$state<Mode>(),refined=$state(false);
-  let jobs=$state<Record<string,{pageIndex:number;message:string}>>({});
+  let timeline:ChapterProgress|undefined,timelineUrl='',lastPhase:ChapterPhase='prepare';
+  let steps=$state<ChapterStep[]>([]),started=$state(0),ended=$state<number>();
   let counts=$state<Activity>({total:0,readable:0,recognized:0,directReady:0,standardReady:0,googleReady:0,directRendered:0,review:0});
   let aborter:AbortController|undefined,releaseAfter=false,refreshRequest=0;
   let orb=$state<HTMLButtonElement>(),collapseButton=$state<HTMLButtonElement>();
@@ -33,6 +38,7 @@
   const primaryRun=$derived(direct?(counts.directReady?'繼續整章直譯':'翻譯本章'):(counts.standardReady<counts.total&&(counts.standardReady>0||counts.recognized>0)?'繼續翻譯':'翻譯本章'));
 
   export function refresh(){
+    if(timeline&&location.href!==timelineUrl){timeline=undefined;steps=[];}
     const next=getActivity(getImages(),$state.snapshot(config));
     if(Object.keys(next).some(key=>next[key as keyof Activity]!==counts[key as keyof Activity]))counts=next;
   }
@@ -60,7 +66,7 @@
         unknownMode=undefined;failure='';detail='鎖定已解除，可從目前進度繼續。';
       }
     };
-    const pause=()=>{stopped=true;releaseAfter=running;detail=running?'正在完成已開始的工作，之後釋放模型。':'模型已安排釋放，譯圖保留。';};
+    const pause=()=>{stopQueue();releaseAfter=running;detail=running?'正在完成已開始的工作，之後釋放模型。':'模型已安排釋放，譯圖保留。';};
     addEventListener('focus',load);
     addEventListener('comic-pause',pause);
     chrome.storage.onChanged.addListener(changed);
@@ -78,7 +84,7 @@
     try{
       const result=await extensionCall(()=>chrome.runtime.sendMessage({channel:'tab-chapter-mode',mode:value}));
       if(!result?.ok)throw new Error(result?.error??'分頁模式未儲存');
-      tabMode=value;detail='已切換此分頁的模式。';refined=false;
+      tabMode=value;detail='已切換此分頁的模式。';refined=false;timeline=undefined;steps=[];
     }catch(error){failure=error instanceof Error?error.message:String(error);}
     finally{changingMode=false;refresh();}
   }
@@ -94,59 +100,81 @@
       if(!result?.ok)throw new Error(result?.error??'無法開啟設定');
     },error=>{failure=error instanceof Error?error.message:String(error);});
   }
-  function progress(d:Diagnostic){
+  function progress(run:ChapterProgress,d:Diagnostic){
+    if(timeline!==run||location.href!==timelineUrl||run.ended!==undefined)return;
     detail=d.message;
-    if(d.jobId&&d.pageIndex!==undefined){
-      const next={...jobs};
-      if(['complete','error','cancelled'].includes(d.stage))delete next[d.jobId];
-      else next[d.jobId]={pageIndex:d.pageIndex,message:d.message};
-      jobs=next;
+    if(d.chapterStep){
+      lastPhase=d.chapterStep.phase;
+      run.update(d.chapterStep,d.message,d.pageIndex);
+      if(d.stage==='error')run.fail(lastPhase);
+      steps=run.rows();
     }
     refresh();
   }
-  function begin(){
-    running=true;stopped=false;refined=false;failure='';jobs={};
-    onRunning(true);aborter=new AbortController();return aborter.signal;
+  function begin(images:HTMLImageElement[],progressMode:ChapterMode){
+    running=true;stopped=false;refined=false;failure='';cancelling=false;
+    const run=new ChapterProgress(progressMode,images.length);
+    timeline=run;timelineUrl=location.href;lastPhase='prepare';steps=run.rows();started=run.started;ended=undefined;
+    onRunning(true);aborter=new AbortController();return {run,signal:aborter.signal};
   }
-  function finish(){
-    refresh();running=false;refining=false;jobs={};onRunning(false);
+  function finish(run:ChapterProgress){
+    run.finish(run.outcome==='running'?'done':run.outcome==='stopping'?'stopped':run.outcome);
+    if(timeline===run){steps=run.rows();ended=run.ended;}
+    refresh();running=false;refining=false;onRunning(false);
     if(releaseAfter){releaseAfter=false;detached(()=>chrome.runtime.sendMessage({channel:'runtime-release'}));}
   }
-  function reportFailure(error:unknown,signal:AbortSignal,usedMode:Mode,gemini:boolean){
+  function stopQueue(){
+    stopped=true;
+    if(timeline&&timeline.ended===undefined){timeline.outcome='stopping';steps=timeline.rows();}
+  }
+  function escapeMenu(menu:HTMLDetailsElement){
+    const keydown=(event:KeyboardEvent)=>{
+      if(event.key!=='Escape'||!menu.open)return;
+      event.stopPropagation();menu.open=false;menu.querySelector('summary')?.focus();
+    };
+    menu.addEventListener('keydown',keydown);
+    return {destroy:()=>menu.removeEventListener('keydown',keydown)};
+  }
+  function reportFailure(run:ChapterProgress,error:unknown,signal:AbortSignal,usedMode:Mode,gemini:boolean){
     if(error instanceof ChapterRefinementError&&error.state==='unknown'){
+      run.outcome='unknown';
       unknownMode=usedMode;failure='Gemini 回覆結果未知。這次請求已鎖定。';detail='可先閱讀已完成的譯圖，並到設定查看請求紀錄。';return;
     }
-    if(signal.aborted){detail='已取消處理，已儲存的文字與譯圖保留。';return;}
+    if(signal.aborted){run.outcome='cancelled';detail='已取消處理，已儲存的文字與譯圖保留。';return;}
+    run.outcome='error';run.fail(lastPhase);
     const reason=(error instanceof Error?error.message:String(error)).replace(/^(?:Error: |GeminiFailure: )+/, '');
     const index=(error as {pageIndex?:number})?.pageIndex;
     failure=/Extension context invalidated/i.test(reason)?'墨譯已更新，請重新整理這個漫畫分頁。':gemini?'Gemini 校正未完成。'+reason:index===undefined?reason:'第 '+(index+1)+' 張未完成。'+reason;
     detail=gemini?'已完成的文字與譯圖可繼續使用。':'可到章節工作台處理該張，或從目前進度繼續。';
   }
-  async function refineWork(images:HTMLImageElement[],signal:AbortSignal,usedMode:Mode){
+  async function refineWork(run:ChapterProgress,images:HTMLImageElement[],signal:AbortSignal,usedMode:Mode,standalone=false){
+    run.refinement();lastPhase='gemini';if(timeline===run)steps=run.rows();
     refining=true;detail=usedMode==='gemini-direct'?'已收齊日文原文，正在等待 Gemini 直譯。':'初譯可閱讀，正在等待 Gemini 校正。';
-    try{await refineChapter(images,progress,signal,usedMode==='gemini-direct');refined=true;}
-    catch(error){reportFailure(error,signal,usedMode,true);}
+    try{await refineChapter(images,d=>progress(run,d),signal,usedMode==='gemini-direct',standalone);refined=true;run.outcome='done';}
+    catch(error){reportFailure(run,error,signal,usedMode,true);}
     finally{refining=false;refresh();}
   }
   async function run(){
     if(running||changingMode||direct&&(readiness!=='ready'||unknownMode===mode))return;
     const images=getImages(),usedMode=mode,wholeOcr=usedMode==='gemini-direct';
     if(!images.length){failure='尚未找到漫畫圖片，請捲動到漫畫頁面再試一次。';return;}
-    const signal=begin();detail='準備翻譯本章…';
+    const {run:current,signal}=begin(images,wholeOcr?'direct':'standard');detail='準備翻譯本章…';
     try{
-      await runChapter(images,progress,refresh,()=>stopped,signal,wholeOcr);
+      await runChapter(images,d=>progress(current,d),refresh,()=>stopped,signal,wholeOcr);
       signal.throwIfAborted();refresh();
-      if(stopped){detail='已停止佇列。已完成的圖片與文字保留。';return;}
-      if(wholeOcr){await refineWork(images,signal,usedMode);return;}
+      if(stopped||!current.isComplete(wholeOcr?'ocr':'render')){
+        current.outcome='stopped';detail='已停止佇列。已完成的圖片與文字保留。';return;
+      }
+      if(wholeOcr){await refineWork(current,images,signal,usedMode);return;}
       detail='初譯已完成，可以閱讀或到工作台校正。';
-      if(config.refineAfterChapter&&canRefineNow)await refineWork(images,signal,usedMode);
-    }catch(error){reportFailure(error,signal,usedMode,false);}
-    finally{finish();}
+      if(config.refineAfterChapter&&canRefineNow)await refineWork(current,images,signal,usedMode);
+    }catch(error){reportFailure(current,error,signal,usedMode,false);}
+    finally{finish(current);}
   }
   async function refine(){
     if(running||!canRefineNow)return;
-    const signal=begin();
-    try{await refineWork(getImages(),signal,'standard');}finally{finish();}
+    const images=getImages(),{run,signal}=begin(images,'refine');
+    try{await refineWork(run,images,signal,'standard',true);}finally{finish(run);}
   }
 </script>
 
@@ -158,7 +186,7 @@
     </button>
   {:else}
     <div class="handle" data-comic-drag>
-      <strong>墨譯</strong>
+      <div><span class="brand" aria-hidden="true">墨</span><strong>章節翻譯</strong></div>
       <button bind:this={collapseButton} data-comic-anchor="expanded" aria-label="縮成浮球" onclick={event=>void collapse(true,event.currentTarget)}>收合</button>
     </div>
     <div class="summary">
@@ -172,12 +200,11 @@
         <progress aria-label="整章可閱讀進度" value={counts.readable} max={counts.total}></progress>
       {/if}
     </div>
-    <label class="mode">此分頁的整章模式
-      <select aria-label="整章翻譯模式" disabled={!modeLoaded||running||changingMode} value={mode} onchange={event=>void changeMode(event.currentTarget.value as Mode)}>
-        <option value="standard">逐張初譯</option><option value="gemini-direct">整章 OCR → Gemini 直譯</option>
-      </select>
-    </label>
-    <div class="actions">
+    <div class="mode">
+      <SmoothTab items={modes} label="整章翻譯模式" disabled={!modeLoaded||running||changingMode} value={mode} onChange={id=>void changeMode(id as Mode)} />
+    </div>
+    {#if steps.length}<AgentSteps {steps} {started} {ended} />{/if}
+    <div class="actions dock-actions">
       {#if !running&&unknownMode===mode}
         <button class="primary" onclick={()=>openSettings('gemini-diagnostics')}>查看請求紀錄</button>
       {:else if !running&&direct&&!directComplete&&readiness!=='ready'}
@@ -191,8 +218,8 @@
         onclick={e=>openChapter(e.currentTarget)}>章節工作台</button>
       {#if counts.readable}<button onclick={toggleOriginal}>原圖／譯圖</button>{/if}
       {#if running}
-        {#if !refining}<button disabled={stopped} onclick={()=>{stopped=true;detail='已開始的圖片完成後停止。';}}>停止佇列</button>{/if}
-        <button onclick={()=>{stopped=true;aborter?.abort();detail='正在取消，已存文字會保留。';}}>取消處理</button>
+        {#if !refining}<button disabled={stopped} onclick={()=>{stopQueue();detail='已開始的圖片完成後停止。';}}>停止佇列</button>{/if}
+        <button class="danger" disabled={cancelling} onclick={()=>{cancelling=true;stopQueue();aborter?.abort();detail='正在取消，已存文字會保留。';}}>取消處理</button>
       {/if}
     </div>
     {#if detail}<p class="detail mx-note" role="status">{detail}</p>{/if}
@@ -200,10 +227,7 @@
       <p class="mx-warning">{readyMessage}{#if !direct} <button onclick={()=>openSettings('gemini')}>前往 Gemini 設定</button>{/if}</p>
     {/if}
     {#if failure}<p class="mx-alert" role="alert">{failure}</p>{/if}
-    {#if running&&Object.keys(jobs).length}
-      <ul aria-label="目前圖片任務">{#each Object.entries(jobs).sort((a,b)=>a[1].pageIndex-b[1].pageIndex) as [id,job] (id)}<li>第 {job.pageIndex+1} 張 · {job.message}</li>{/each}</ul>
-    {/if}
-    <details><summary>章節工具</summary>
+    <details use:escapeMenu><summary>章節工具</summary>
       <div class="actions">
         <button onclick={()=>dispatchEvent(new CustomEvent('comic-pause-page'))}>暫停並釋放模型</button>
         {#if !direct&&refined&&canRefineNow}<button disabled={running} onclick={refine}>整章 Gemini 校正</button>{/if}
@@ -215,10 +239,14 @@
 </section>
 
 <style>
-  section { width: min(382px,calc(100vw - 24px)); max-height: min(540px,calc(100dvh - 24px)); overflow: auto; padding: 12px; border-radius: 14px; border: 1px solid var(--mx-border); background: var(--mx-paper); box-shadow: var(--mx-shadow); }
-  section.collapsed { width: 64px; padding: 0; border-radius: 50%; }
+  section { width: min(365px,calc(100vw - 24px)); max-height: min(610px,calc(100dvh - 24px)); overflow: auto; padding: 12px; border-radius: 16px; border: 1px solid var(--mx-border); background: var(--mx-paper); box-shadow: var(--mx-shadow); transform-origin:bottom right; animation:dock-open 240ms cubic-bezier(.22,.72,.3,1) both; }
+  section.collapsed { width: 64px; padding: 0; border-radius: 50%; animation-name:dock-orb; }
+  @keyframes dock-open { from {opacity:.6;box-shadow:0 4px 10px #1b33291a;} to {opacity:1;box-shadow:var(--mx-shadow);} }
+  @keyframes dock-orb { from {opacity:.65;} to {opacity:1;} }
   .handle { display: flex; align-items: center; justify-content: space-between; cursor: move; touch-action: none; }
-  .handle strong { font-size: 17px; }
+  .handle > div { display:flex; align-items:center; gap:8px; }
+  .handle strong { font-size: 15px; }
+  .brand { display:grid; place-items:center; width:29px; height:29px; border-radius:8px; color:white; background:var(--mx-green); font-weight:700; }
   .handle button { padding: 4px 8px; min-height: 29px; font-size: 12px; }
   .orb { display: grid; place-content: center; width: 62px; height: 62px; border-radius: 50%; touch-action: none; user-select: none; }
   .orb strong { font-size: 20px; }
@@ -229,11 +257,14 @@
   .summary progress { appearance: none; display: block; width: 100%; height: 5px; border: 0; overflow: hidden; border-radius: 5px; margin-top: 7px; accent-color: var(--mx-green); background: #d6e4d6; }
   .summary progress::-webkit-progress-bar { background: #d6e4d6; }
   .summary progress::-webkit-progress-value { background: var(--mx-green); border-radius: 5px; }
-  .mode { display: grid; gap: 3px; color: var(--mx-muted); font-size: 12px; margin: 8px 0; }
-  .mode select { width: 100%; min-height: 34px; font-size: 13px; }
+  .mode { margin: 8px 0; }
   p { margin: 7px 0 0; overflow-wrap: anywhere; }
   .actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-  ul { max-height: 80px; overflow: auto; margin: 6px 0 0; padding-left: 20px; overflow-wrap: anywhere; }
+  .dock-actions { position:sticky; bottom:0; z-index:2; padding:8px 0 3px; background:var(--mx-paper); }
+  .dock-actions button { font-size:12px; min-height:34px; }
   details { border-top: 1px solid var(--mx-line); padding-top: 7px; margin: 8px 0 0; }
   details .actions { margin-top: 6px; }
+  details[open] .actions { transform-origin:top left; animation:tools-open 200ms cubic-bezier(.2,.85,.35,1.08) both; }
+  @keyframes tools-open { from {opacity:0; transform:translateY(-4px) scale(.97);} to {opacity:1;transform:none;} }
+  @media (prefers-reduced-motion:reduce) { section, section.collapsed, details[open] .actions { animation:none; } }
 </style>
