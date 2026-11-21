@@ -125,6 +125,17 @@ try{
   const original=editor.getByLabel('日文原文',{exact:true}),translated=editor.getByLabel('繁中譯文',{exact:true});
   const select=editor.getByLabel('選擇文字框',{exact:true});
   await select.selectOption('right');assert.equal(await original.inputValue(),'ねこです。');
+  const views=editor.getByRole('group',{name:'比較原圖與譯圖'});
+  await button(views,'譯圖').press('ArrowLeft');
+  assert.equal(await button(views,'原圖').getAttribute('aria-pressed'),'true');
+  await button(views,'原圖').press('ArrowRight');
+  assert.equal(await button(views,'譯圖').getAttribute('aria-pressed'),'true');
+  const editors=editor.getByRole('group',{name:'校正項目'});
+  await button(editors,'文字').press('ArrowRight');
+  await editor.getByRole('combobox',{name:/呈現方式/}).waitFor();
+  await button(editors,'排版').press('ArrowLeft');
+  await original.waitFor();
+  report.checks.push('Smooth Tab 的方向鍵切換原圖、譯圖與文字、排版');
   const frameTools=()=>editor.getByText('文字框工具',{exact:true}).click();
   const menu=()=>editor.getByText('頁面工具',{exact:true}).click();
   await frameTools();await button(editor,'拆框').click();

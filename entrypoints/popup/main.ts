@@ -1,9 +1,13 @@
 import '../../src/studio-theme.css';
 import {requestAllWebAccess,allWebOrigins} from '../../src/site-access';
+import {attachToolbar} from '../../src/vendor/kokonut-ui/toolbar';
 
 const button=(id:string)=>document.getElementById(id) as HTMLButtonElement;
 const primary=button('primary'),visibility=button('visibility'),pause=button('pause'),grant=button('grant');
 const text=document.getElementById('status')!,tabState=document.getElementById('tab-state')!,access=document.getElementById('access-state')!;
+const tabCard=document.querySelector<HTMLElement>('.tab-card')!;
+document.getElementById('popup-version')!.textContent=chrome.runtime.getManifest().version;
+attachToolbar(document.querySelector<HTMLElement>('.shortcuts')!);
 let tab:chrome.tabs.Tab|undefined,tools:{hidden:boolean;hasImages:boolean}|undefined,inFlight=false;
 function report(message:string,error=false){
   text.hidden=false;text.textContent=message;text.className=error?'mx-alert':'mx-note';
@@ -13,6 +17,7 @@ async function inspect(){
   const web=tab?.id!=null&&/^https?:/.test(tab.url??'');
   const active=web?await chrome.tabs.sendMessage(tab!.id!,{channel:'page-tools-state'}).catch(()=>undefined):undefined;
   tools=active?.ok?active:undefined;
+  tabCard.dataset.state=tools?(tools.hidden?'hidden':'visible'):'inactive';
   primary.hidden=!web||!!tools&&!tools.hidden;
   primary.textContent=tools?.hidden?'顯示工具列':'啟用本頁墨譯';
   visibility.hidden=!tools||tools.hidden;

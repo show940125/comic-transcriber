@@ -15,6 +15,10 @@
   import {extensionCall,detached} from './extension-context';
   import {correctionRegions,type CorrectionBinding} from './correction-import';
   import {SerialLane} from './scheduling';
+  import SmoothTab from './vendor/kokonut-ui/SmoothTab.svelte';
+
+  const views = [{id: 'original', title: '原圖'}, {id: 'translated', title: '譯圖'}];
+  const editors = [{id: 'text', title: '文字'}, {id: 'layout', title: '排版'}];
   let { siteInput, chapterNav, onClose, siteTargetCurrent, onSiteApply, onSiteError, onSiteSummary, onSiteProgress, onSiteBusy, onSiteReview }: {
     siteInput?: {base64?:string; mime?:string; imageUrl?:string; auto?:boolean; priorSummary?:string;sourcePageUrl?:string;pageIndex?:number;pageData?:PageData};
     siteTargetCurrent?:()=>boolean;
@@ -417,9 +421,9 @@
     {/if}
     <section class="stage" aria-label="漫畫預覽區">
       {#if image}
-        <div class="view-controls mx-segments" role="group" aria-label="比較原圖與譯圖">
-          <button aria-pressed={original} disabled={busy} onclick={()=>{original=true;paint();}}>原圖</button>
-          <button aria-pressed={!original} disabled={busy} onclick={()=>{original=false;paint();}}>譯圖</button>
+        <div class="view-controls">
+          <SmoothTab items={views} label="比較原圖與譯圖" value={original?'original':'translated'}
+            disabled={busy} onChange={id=>{original=id==='original';paint();}} />
         </div>
       {:else}
         <div class="empty">
@@ -461,9 +465,9 @@
           </select>
         {/if}
         {#if active}
-          <div class="segmented mx-segments" role="group" aria-label="校正項目">
-            <button aria-pressed={panel==='text'} onclick={()=>panel='text'}>文字</button>
-            <button aria-pressed={panel==='layout'} onclick={()=>panel='layout'}>排版</button>
+          <div class="segmented">
+            <SmoothTab items={editors} label="校正項目" value={panel}
+              onChange={id=>panel=id==='layout'?'layout':'text'} />
           </div>
           {#if panel==='text'}
             <div class="source-editor">
@@ -603,7 +607,6 @@
   .rail b { font-size: 10px; color: var(--mx-review); }
   .stage { background: var(--mx-canvas); padding: 10px clamp(8px, 2vw, 30px) 18px; overflow: auto; }
   .view-controls { width: max-content; max-width: 100%; margin: 0 auto 12px; }
-  .view-controls button { min-width: 66px; }
   .row button[aria-pressed=true], .menu-items button[aria-pressed=true] { background: var(--mx-hover); border-color: var(--mx-green); font-weight: 650; }
   .paper { width: min(100%, 780px); margin: 0 auto; position: relative; box-shadow: var(--mx-shadow); background: var(--mx-surface); }
   .image-wrap { width: 100%; }

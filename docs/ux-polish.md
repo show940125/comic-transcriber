@@ -1,8 +1,18 @@
-# 0.1.19 介面細修與驗收
+# 章節工作台與擴充套件彈窗
+
+## 0.1.20 原生彈窗修正及元件實裝
+
+0.1.19 使用 `max-width: 100vw` 限制彈窗。Chrome 以內容估算彈窗大小，內容卻反過來被初始視窗大小限制，造成逐字換行。在隔離 Chromium 用 `chrome.action.openPopup()` 開啟實際彈窗，0.1.18 為 300 px，0.1.19 縮到 104 px。0.1.20 以 336 px 固定內容寬度，Chromium 與 Edge 的已啟用頁面均量到 336 × 255 px，並驗證方向鍵、隱藏及恢復工具列。[Chrome 擴充套件 action 說明](https://developer.chrome.com/docs/extensions/reference/api/action#popup)
+
+直接採用 DesignBookmark Motion 所列的兩個 Kokonut UI 元件。Toolbar 保留原本的方向鍵、Home、End 與 Tab 焦點規則，使用原生按鈕開啟三個常用頁面。Smooth Tab 將上游的選取、尺寸量測及滑動指示移植到 Svelte，供兩組工作台切換使用。保留上游 MIT 授權與固定版次。[DesignBookmark Motion](https://designbookmark.com/motion) · [Toolbar 原始碼](https://github.com/kokonut-labs/kokonutui/blob/1c850ae0c113592fc3ce8aaa5a5aa0dc720a58/components/kokonutui/toolbar.tsx) · [Smooth Tab 原始碼](https://github.com/kokonut-labs/kokonutui/blob/87ec36a60e857eed56f3784e60e8d28cf6971fd7/components/kokonutui/smooth-tab.tsx) · [第三方授權](../NOTICE.md)
+
+有原創測試素材及 Playwright Chromium 時，執行 `node scripts/popup-regression.mjs`。以 `COMIC_BUILD_DIR` 指定其他套件目錄，設 `TEST_BROWSER=msedge` 可驗證 Microsoft Edge。報告量測由 `chrome.action.openPopup()` 開啟的彈窗，附圖則用相同套件與量測尺寸呈現。
+
+## 0.1.19 介面細修與驗收
 
 這版沿用已驗收的三欄章節工作台。讀者可在縮圖換頁、在漫畫預覽選框、在右側比較與校正。採用 OCR 候選只改當前一框，「套用至漫畫頁」才更新譯圖。
 
-## DesignBookmark 元件評估
+### DesignBookmark 元件評估
 
 | 參考元件 | 墨譯的取捨 |
 | --- | --- |
@@ -14,7 +24,7 @@
 
 元件用專案既有的 Svelte 和 CSS 實作，按鈕僅短暫過渡底色與邊線。系統開啟減少動態效果時關閉過渡。[DesignBookmark Motion](https://designbookmark.com/motion) · [Emil Design Engineering](https://github.com/emilkowalski/skills/tree/main/skills/emil-design-eng)
 
-## 以實際套件壓測
+### 以實際套件壓測
 
 依 `break-ui` 的方法，先用相同校正檔跑 0.1.18，再跑 0.1.19。總共 12 組配置，涵蓋 1 或 60 頁、空結果、單一空候選、一頁 300 框、約 1,450 字元的候選和 300 字元的診斷訊息。[break-ui](https://github.com/emilkowalski/skills/tree/main/skills/break-ui)
 
@@ -26,7 +36,7 @@
 
 在 1280 × 820、390 × 660 和 320 × 480 的測試中，「套用至漫畫頁」均留在工作台底列。抽測一般文字、標註、按鈕和提示，最低對比為 6.04:1。
 
-## 瀏覽器驗收
+### 瀏覽器驗收
 
 - **0.1.18 個人 Chrome。** 在 Rawkuma《Tensei Goblin》第 24 話驗證 17 頁縮圖與換頁、Escape 關閉及焦點返回。使用者另回報同一章已完整翻譯成功。
 - **0.1.19 隔離 Chromium／Edge。** 用原創漫畫驗證章節模式互不干擾、進度、拆框、取消與撤銷、候選採用、匯入、套用譯圖及快取刪除範圍。Chromium 額外實跑 RT-DETR、INT8 MangaOCR 與全精度 KV 辨識。翻譯服務使用本機固定回覆。

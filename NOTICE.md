@@ -6,6 +6,7 @@ Comic Transcriber core: Copyright 2026. Apache License 2.0.
 |---|---|---|
 | WXT / Svelte / ONNX Runtime / WebLLM | MIT / MIT / MIT / Apache-2.0 | Their installed package manifests and upstream repositories |
 | OpenCC-js | MIT | https://github.com/nk2028/opencc-js |
+| Kokonut UI Toolbar and Smooth Tab | MIT | [Toolbar revision](https://github.com/kokonut-labs/kokonutui/blob/1c850ae0c113592fc3ce8aaa5a5aa0dc720a58/components/kokonutui/toolbar.tsx), [Smooth Tab revision](https://github.com/kokonut-labs/kokonutui/blob/87ec36a60e857eed56f3784e60e8d28cf6971fd7/components/kokonutui/smooth-tab.tsx). Ported to DOM and Svelte. License in third-party-licenses/kokonut-ui/LICENSE.txt. |
 | Noto Sans CJK TC | SIL OFL-1.1 | Bundled fonts/OFL.txt; revision and SHA-256 in model-lock.json |
 | RT-DETR comic-text-and-bubble-detector | Apache-2.0 model-card declaration | https://huggingface.co/ogkalu/comic-text-and-bubble-detector |
 | Manga-OCR ONNX | Apache-2.0 model-card declaration | https://huggingface.co/mayocream/manga-ocr-onnx ; original https://github.com/kha-white/manga-ocr |

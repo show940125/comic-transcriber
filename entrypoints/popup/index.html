@@ -2,13 +2,27 @@
 <html lang="zh-Hant">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>墨譯</title></head>
 <body class="moyu">
-  <header><h1>墨譯</h1><p id="tab-state" class="mx-note">正在確認目前分頁…</p></header>
-  <button id="primary" class="primary" hidden></button>
-  <nav aria-label="墨譯功能">
-    <button id="reader">本機漫畫工作台</button>
-    <button id="settings">模型與閱讀設定</button>
-    <button id="cache">快取與推論資源</button>
-  </nav>
+  <header>
+    <span class="brand-mark" aria-hidden="true">墨</span>
+    <h1>墨譯</h1>
+    <span id="popup-version" class="version"></span>
+  </header>
+  <section class="tab-card" aria-label="目前分頁">
+    <span class="tab-dot" aria-hidden="true"></span>
+    <p id="tab-state" class="mx-note">正在確認目前分頁…</p>
+    <button id="primary" class="primary" type="button" hidden></button>
+  </section>
+  <div class="shortcuts" role="toolbar" aria-label="墨譯功能">
+    <button id="reader" type="button" aria-label="本機漫畫工作台" title="本機漫畫工作台">
+      <span aria-hidden="true" class="tool-icon book"></span><span>本機工作台</span>
+    </button>
+    <button id="settings" type="button" aria-label="模型與閱讀設定" title="模型與閱讀設定" tabindex="-1">
+      <span aria-hidden="true" class="tool-icon sliders"></span><span>閱讀設定</span>
+    </button>
+    <button id="cache" type="button" aria-label="快取與推論資源" title="快取與推論資源" tabindex="-1">
+      <span aria-hidden="true" class="tool-icon stack"></span><span>快取資源</span>
+    </button>
+  </div>
   <details>
     <summary>分頁與網站權限</summary>
     <p id="access-state" class="mx-note">依 Chrome 網站存取設定</p>
@@ -19,18 +33,57 @@
   <p id="status" role="status" hidden></p>
   <script type="module" src="./main.ts"></script>
   <style>
-    body { width: 312px; max-width: 100vw; margin: 0; padding: 14px 16px; background: var(--mx-paper); }
-    header { padding: 10px 12px; margin-bottom: 9px; background: var(--mx-tint); border: 1px solid var(--mx-line); border-radius: 10px; }
-    h1 { font-size: 24px; letter-spacing: .04em; line-height: 1.25; margin: 0; }
-    header p { margin-bottom: 0; }
-    p { margin: 4px 0 8px; }
-    button { width: 100%; text-align: left; }
-    button.primary { text-align: center; }
-    nav { display: grid; margin: 10px 0; padding: 2px; border: 1px solid var(--mx-line); background: var(--mx-surface); border-radius: 9px; }
-    nav button { display: flex; justify-content: space-between; align-items: center; gap: 8px; border-color: transparent; }
-    nav button::after { content: ""; width: 6px; height: 6px; flex-shrink: 0; margin-inline-end: 2px; border: solid var(--mx-muted); border-width: 1px 1px 0 0; rotate: 45deg; }
-    details { border-top: 1px solid var(--mx-line); padding-top: 7px; }
-    details button { margin-top: 5px; }
+    /* The browser sizes its action popup from the document's intrinsic width. */
+    html, body { width: 336px; min-width: 336px; }
+    body { margin: 0; padding: 16px; background: var(--mx-paper); }
+    header { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+    h1 { margin: 0; font-size: 22px; line-height: 1.25; }
+    .brand-mark {
+      display: grid; place-items: center; width: 39px; height: 39px; border-radius: 11px;
+      background: var(--mx-green); color: white; font-weight: 700; font-size: 18px;
+    }
+    .version { margin-left: auto; font-size: 12px; color: var(--mx-muted); font-variant-numeric: tabular-nums; }
+    .tab-card {
+      display: grid; grid-template-columns: 8px minmax(0, 1fr); align-items: start; gap: 8px 9px;
+      padding: 12px; border: 1px solid var(--mx-line); border-radius: 11px; background: var(--mx-tint);
+    }
+    .tab-dot { margin-top: 7px; width: 7px; height: 7px; border-radius: 50%; background: var(--mx-border); }
+    .tab-card[data-state=visible] .tab-dot { background: var(--mx-green); }
+    .tab-card[data-state=hidden] .tab-dot { background: #a56725; }
+    .tab-card p { margin: 0; }
+    .tab-card button { grid-column: 1 / -1; }
+    .shortcuts {
+      display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 3px;
+      margin: 12px 0; padding: 4px; border: 1px solid var(--mx-line);
+      border-radius: 11px; background: var(--mx-surface);
+    }
+    .shortcuts button {
+      display: grid; justify-items: center; align-content: center; gap: 6px;
+      min-height: 57px; padding: 7px 3px; border-color: transparent; font-size: 12px;
+      line-height: 1.25; white-space: nowrap;
+    }
+    .shortcuts button:focus-visible { background: var(--mx-hover); outline-offset: -2px; }
+    .tool-icon { width: 16px; height: 16px; position: relative; }
+    .book { border: 1.5px solid currentColor; border-radius: 3px; }
+    .book::after { content: ""; position: absolute; left: 50%; top: 1px; bottom: 1px; border-left: 1px solid currentColor; }
+    .sliders {
+      background: linear-gradient(currentColor, currentColor) center 3px / 15px 1px no-repeat,
+        linear-gradient(currentColor, currentColor) center 8px / 15px 1px no-repeat,
+        linear-gradient(currentColor, currentColor) center 13px / 15px 1px no-repeat;
+    }
+    .sliders::after {
+      content: ""; position: absolute; inset: 0;
+      background: radial-gradient(circle at 5px 3.5px, currentColor 1.7px, transparent 2px),
+        radial-gradient(circle at 11px 8.5px, currentColor 1.7px, transparent 2px),
+        radial-gradient(circle at 7px 13.5px, currentColor 1.7px, transparent 2px);
+    }
+    .stack { border: 1.5px solid currentColor; border-radius: 3px; height: 12px; margin-block: 2px; }
+    .stack::before, .stack::after { content: ""; position: absolute; left: 2px; right: 2px; border-top: 1px solid currentColor; }
+    .stack::before { top: 3px; }
+    .stack::after { bottom: 3px; }
+    details { border-top: 1px solid var(--mx-line); padding-top: 9px; }
+    details p { margin: 7px 0 4px; }
+    details button { width: 100%; margin-top: 5px; text-align: left; }
     #status { margin: 8px 0 0; }
   </style>
 </body>

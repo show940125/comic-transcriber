@@ -62,29 +62,6 @@
 .moyu :where(dialog) { color: var(--mx-ink); background: var(--mx-paper); border: 1px solid var(--mx-border); border-radius: 12px; box-shadow: var(--mx-shadow); }
 .moyu :where(dialog)::backdrop { background: #182d25a6; }
 
-.moyu .mx-segments {
-  display: flex;
-  gap: 2px;
-  padding: 3px;
-  border: 1px solid var(--mx-line);
-  border-radius: 9px;
-  background: var(--mx-tint);
-}
-.moyu .mx-segments button {
-  min-height: 32px;
-  min-width: 0;
-  flex: 1;
-  border: 1px solid transparent;
-  border-radius: 6px;
-  padding-block: 4px;
-  background: transparent;
-}
-.moyu .mx-segments button[aria-pressed=true] {
-  background: var(--mx-surface);
-  border-color: var(--mx-line);
-  box-shadow: 0 1px 3px #1b332918;
-  font-weight: 700;
-}
 @media (prefers-reduced-motion: reduce) {
   .moyu :where(button, .mx-button) { transition: none; }
 }
